@@ -1,0 +1,369 @@
+// Mirrors backend/src/models/*.ts as serialized over JSON
+
+export const UserRoles = {
+  ADMIN: "admin",
+  PROJECT_ADMIN: "project_admin",
+  MEMBER: "member",
+} as const;
+
+export type UserRole = (typeof UserRoles)[keyof typeof UserRoles];
+
+export const AvailableUserRoles: UserRole[] = Object.values(UserRoles);
+
+export interface UserAvatar {
+  url: string;
+  localPath: string;
+}
+
+export interface User {
+  _id: string;
+  avatar: UserAvatar;
+  username: string;
+  email: string;
+  fullName?: string;
+  isEmailVerified: boolean;
+  /** Email me about assignments and mentions */
+  emailNotifications: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The public subset of a user returned by aggregation lookups */
+export type UserSummary = Pick<
+  User,
+  "_id" | "username" | "fullName" | "avatar"
+>;
+
+export interface Project {
+  _id: string;
+  name: string;
+  description?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- Pagination ----------
+
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  pagination: PaginationMeta;
+}
+
+export type SortOrder = "asc" | "desc";
+
+export interface ListParams<S extends string = string> {
+  page?: number;
+  limit?: number;
+  sort?: S;
+  order?: SortOrder;
+  search?: string;
+}
+
+// ---------- Projects ----------
+
+/** An item of GET /projects */
+export interface ProjectListItem {
+  project: Pick<
+    Project,
+    "_id" | "name" | "description" | "createdAt" | "updatedAt" | "createdBy"
+  > & { members: number };
+  role: UserRole;
+  isOwner: boolean;
+}
+
+export interface ProjectsResponse extends Paginated<ProjectListItem> {
+  stats: { totalProjects: number; adminProjects: number; totalSeats: number };
+}
+
+/** GET /projects/:projectId — includes the caller's role */
+export interface ProjectDetail extends Project {
+  members: number;
+  role: UserRole;
+  isOwner: boolean;
+}
+
+/** An item of GET /projects/:projectId/members */
+export interface ProjectMember {
+  project: string;
+  user: UserSummary;
+  role: UserRole;
+  isOwner: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Pending invitation for an email that has no account yet */
+export interface ProjectInvite {
+  _id: string;
+  project: string;
+  email: string;
+  role: UserRole;
+  invitedBy?: UserSummary;
+  status: "pending" | "accepted";
+  isExpired: boolean;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface AddMemberResult {
+  status: "added" | "updated" | "invited";
+}
+
+/** Tokens are set as httpOnly cookies and never included in the body */
+export interface LoginResult {
+  user: User;
+}
+
+// ---------- Tasks ----------
+
+export const TaskStatuses = {
+  TODO: "todo",
+  IN_PROGRESS: "in_progress",
+  DONE: "done",
+} as const;
+
+export type TaskStatus = (typeof TaskStatuses)[keyof typeof TaskStatuses];
+
+export const AvailableTaskStatuses: TaskStatus[] = Object.values(TaskStatuses);
+
+export const TaskPriorities = {
+  LOW: "low",
+  MEDIUM: "medium",
+  HIGH: "high",
+  URGENT: "urgent",
+} as const;
+
+export type TaskPriority = (typeof TaskPriorities)[keyof typeof TaskPriorities];
+
+/** Least to most important */
+export const AvailableTaskPriorities: TaskPriority[] =
+  Object.values(TaskPriorities);
+
+// Mirrors backend/src/utils/constants.ts
+export const MAX_TASK_LABELS = 10;
+export const MAX_LABEL_LENGTH = 30;
+
+export interface TaskAttachment {
+  _id: string;
+  url: string;
+  name: string;
+  mimetype: string;
+  size: number;
+}
+
+/** An item of GET /tasks/:projectId */
+export interface TaskListItem {
+  _id: string;
+  title: string;
+  description?: string;
+  project: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  /** ISO date at 12:00 UTC; the calendar day is `dueDate.slice(0, 10)` */
+  dueDate?: string;
+  labels: string[];
+  /** Sprint id; missing = backlog */
+  sprint?: string;
+  assignedTo?: UserSummary;
+  assignedBy?: string;
+  subtaskCount: number;
+  completedSubtaskCount: number;
+  attachmentCount: number;
+  commentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Subtask {
+  _id: string;
+  title: string;
+  task: string;
+  isCompleted: boolean;
+  createdBy?: UserSummary;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSummary {
+  total: number;
+  todo: number;
+  in_progress: number;
+  done: number;
+  overdue: number;
+  assignedToMeOpen: number;
+}
+
+export interface TasksResponse extends Paginated<TaskListItem> {
+  summary: TaskSummary;
+}
+
+/** GET /tasks/:projectId/t/:taskId */
+export interface TaskDetail {
+  _id: string;
+  title: string;
+  description?: string;
+  project: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  dueDate?: string;
+  labels: string[];
+  sprint?: string;
+  assignedTo?: UserSummary;
+  assignedBy?: UserSummary;
+  attachments: TaskAttachment[];
+  subtasks: Subtask[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- Notes ----------
+
+export interface Note {
+  _id: string;
+  project: string;
+  /** Sanitized rich text HTML */
+  content: string;
+  /** Plain text of `content`, for previews */
+  contentText: string;
+  createdBy?: UserSummary;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- Task comments ----------
+
+export interface TaskComment {
+  _id: string;
+  task: string;
+  project: string;
+  author?: UserSummary;
+  /** Sanitized rich text HTML */
+  body: string;
+  editedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- Task activity (history) ----------
+
+export type TaskActivityType =
+  | "created"
+  | "title_changed"
+  | "description_changed"
+  | "status_changed"
+  | "priority_changed"
+  | "assignee_changed"
+  | "due_date_changed"
+  | "labels_changed"
+  | "attachment_added"
+  | "attachment_removed"
+  | "subtask_added"
+  | "subtask_completed"
+  | "subtask_reopened"
+  | "subtask_deleted"
+  | "comment_added"
+  | "sprint_changed";
+
+export interface TaskActivity {
+  _id: string;
+  task: string;
+  actor?: UserSummary;
+  type: TaskActivityType;
+  from?: unknown;
+  to?: unknown;
+  name?: string;
+  createdAt: string;
+}
+
+// ---------- Notifications ----------
+
+export type NotificationType = "task_assigned" | "task_commented" | "mentioned";
+
+export interface AppNotification {
+  _id: string;
+  type: NotificationType;
+  actor?: UserSummary;
+  project: string;
+  task?: string;
+  projectName: string;
+  taskTitle?: string;
+  excerpt?: string;
+  readAt?: string;
+  createdAt: string;
+}
+
+export interface NotificationsResponse extends Paginated<AppNotification> {
+  unreadCount: number;
+}
+
+// ---------- Sprints ----------
+
+export type SprintStatus = "planned" | "active" | "completed";
+
+export interface Sprint {
+  _id: string;
+  project: string;
+  name: string;
+  goal?: string;
+  /** ISO dates at 12:00 UTC (calendar days) */
+  startDate?: string;
+  endDate?: string;
+  status: SprintStatus;
+  startedAt?: string;
+  completedAt?: string;
+  taskCount: number;
+  doneCount: number;
+  createdAt: string;
+}
+
+export interface SprintsResponse {
+  sprints: Sprint[];
+  backlog: { taskCount: number; doneCount: number };
+}
+
+// ---------- My work ----------
+
+export interface MyTask extends Omit<
+  TaskListItem,
+  | "project"
+  | "assignedTo"
+  | "subtaskCount"
+  | "completedSubtaskCount"
+  | "commentCount"
+> {
+  project: { _id: string; name: string };
+}
+
+export interface MyTasksResponse extends Paginated<MyTask> {
+  summary: { open: number; done: number; overdue: number; dueThisWeek: number };
+}
+
+// ---------- Global search ----------
+
+export interface SearchResults {
+  query: string;
+  projects: { _id: string; name: string; description?: string }[];
+  tasks: {
+    _id: string;
+    title: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    dueDate?: string;
+    project: { _id: string; name: string };
+  }[];
+  notes: {
+    _id: string;
+    excerpt: string;
+    updatedAt: string;
+    project: { _id: string; name: string };
+  }[];
+}

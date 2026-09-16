@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+
+# Uploaded files (avatars, task attachments)
+backend/public/images/*
+!backend/public/images/.gitkeep
+
+# macOS / editor noise
+__MACOSX/
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# Test / tooling output
+coverage/
+.tmp-check/
