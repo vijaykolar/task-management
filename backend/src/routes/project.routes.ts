@@ -14,6 +14,7 @@ import {
   transferOwnership,
   updateMemberRole,
   updateProject,
+  updateProjectStatuses,
 } from "../controllers/project.controllers.js";
 import {
   validateProjectPermission,
@@ -30,6 +31,7 @@ import {
 } from "../validators/index.js";
 
 const ADMIN_ONLY = [UserRolesEnum.ADMIN];
+const TASK_MANAGERS = [UserRolesEnum.ADMIN, UserRolesEnum.PROJECT_ADMIN];
 const projectChanged = broadcastProjectChange("project");
 const membersChanged = broadcastProjectChange("members");
 
@@ -52,6 +54,16 @@ router
     updateProject,
   )
   .delete(validateProjectPermission(ADMIN_ONLY), projectChanged, deleteProject);
+
+// Moving tasks between statuses also changes the board, so tell task views too
+router
+  .route("/:projectId/statuses")
+  .put(
+    validateProjectPermission(TASK_MANAGERS),
+    projectChanged,
+    broadcastProjectChange("tasks"),
+    updateProjectStatuses,
+  );
 
 router
   .route("/:projectId/leave")

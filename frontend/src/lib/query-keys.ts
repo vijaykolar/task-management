@@ -42,6 +42,14 @@ export const queryKeys = {
       [...queryKeys.tasks.project(projectId), "activity", taskId] as const,
     comments: (projectId: string, taskId: string) =>
       [...queryKeys.tasks.project(projectId), "comments", taskId] as const,
+    links: (projectId: string, taskId: string) =>
+      [...queryKeys.tasks.project(projectId), "links", taskId] as const,
+    epics: (projectId: string) =>
+      [...queryKeys.tasks.project(projectId), "epics"] as const,
+    picker: (projectId: string, search: string) =>
+      [...queryKeys.tasks.project(projectId), "picker", search] as const,
+    // Personal, so not nested under the project's tasks (they refetch often)
+    savedFilters: (projectId: string) => ["saved-filters", projectId] as const,
     commentPage: (projectId: string, taskId: string, params: object) =>
       [...queryKeys.tasks.comments(projectId, taskId), params] as const,
     // Reports are derived from tasks, so every task or sprint change (which

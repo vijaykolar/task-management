@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { formatBytes } from "@/lib/format";
 import { parsePoints } from "@/lib/story-points";
-import { TaskPriorities, TaskStatuses } from "@/types/models";
+import { AvailableTaskTypes, TaskPriorities } from "@/types/models";
 
 // Mirrors backend/src/middlewares/multer.middleware.ts
 export const MAX_FILES_PER_UPLOAD = 5;
@@ -18,11 +18,11 @@ export const taskSchema = z.object({
     .min(1, "Title is required")
     .max(200, "Keep the title under 200 characters"),
   description: z.string().trim().max(5000, "Keep it under 5000 characters"),
-  status: z.enum([
-    TaskStatuses.TODO,
-    TaskStatuses.IN_PROGRESS,
-    TaskStatuses.DONE,
-  ]),
+  /** A status key from the project's workflow */
+  status: z.string().min(1, "Choose a status"),
+  type: z.enum(AvailableTaskTypes),
+  /** Epic id, "" = none */
+  epic: z.string(),
   /** "" = unassigned */
   assignedTo: z.string(),
   priority: z.enum([

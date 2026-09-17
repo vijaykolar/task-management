@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
 import { FormAlert } from "@/components/common/form-alert";
@@ -13,6 +13,7 @@ import {
   StoryPointsInput,
 } from "@/components/tasks/task-fields";
 import { TaskStatusSelect } from "@/components/tasks/task-status-badge";
+import { EpicSelect, TaskTypeSelect } from "@/components/tasks/task-type";
 import { SprintSelect } from "@/components/sprints/sprint-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,19 +41,23 @@ import {
   type TaskValues,
 } from "@/features/tasks/schemas";
 import { applyServerFieldErrors } from "@/lib/form-errors";
-import {
-  TaskStatuses,
-  type TaskPriority,
-  type TaskStatus,
-  type UserSummary,
+import type {
+  TaskPriority,
+  TaskRef,
+  TaskStatus,
+  TaskType,
+  UserSummary,
 } from "@/types/models";
 import { dueDateKey } from "@/lib/due-date";
 
 export interface EditableTask {
   _id: string;
+  key?: string;
+  type: TaskType;
   title: string;
   description?: string;
   status: TaskStatus;
+  epic?: TaskRef;
   priority: TaskPriority;
   dueDate?: string;
   labels: string[];
@@ -92,7 +97,7 @@ export function TaskFormDialog({
 function TaskForm({
   projectId,
   task,
-  defaultStatus = TaskStatuses.TODO,
+  defaultStatus = "todo",
   defaultSprint,
   onCreated,
   onDone,
@@ -111,6 +116,8 @@ function TaskForm({
       title: task?.title ?? "",
       description: task?.description ?? "",
       status: task?.status ?? defaultStatus,
+      type: task?.type ?? "task",
+      epic: task?.epic?._id ?? "",
       assignedTo: task?.assignedTo?._id ?? "",
       priority: task?.priority ?? "medium",
       dueDate: dueDateKey(task?.dueDate) ?? "",
@@ -120,6 +127,8 @@ function TaskForm({
     },
   });
 
+  const type = useWatch({ control: form.control, name: "type" });
+  const isEpic = type === "epic";
   const existingCount = task?.attachmentCount ?? 0;
   const filesError = validateFiles(files, existingCount);
 
@@ -127,6 +136,9 @@ function TaskForm({
     if (filesError) return;
     const values = {
       ...rest,
+      // Epics sit above sprints and can't have an epic themselves
+      epic: rest.type === "epic" ? "" : rest.epic,
+      sprint: rest.type === "epic" ? "" : rest.sprint,
       storyPoints: pointsText.trim() ? Number(pointsText) : ("" as const),
     };
     const onError = (error: unknown) =>
@@ -134,6 +146,8 @@ function TaskForm({
         "title",
         "description",
         "status",
+        "type",
+        "epic",
         "assignedTo",
         "priority",
         "dueDate",
@@ -169,7 +183,9 @@ function TaskForm({
   return (
     <form onSubmit={onSubmit} noValidate>
       <DialogHeader>
-        <DialogTitle>{isEdit ? "Edit task" : "New task"}</DialogTitle>
+        <DialogTitle>
+          {isEdit ? `Edit ${task.key ?? "task"}` : "New task"}
+        </DialogTitle>
         <DialogDescription>
           {isEdit
             ? "Update the task details, assignee or add more files."
@@ -218,11 +234,51 @@ function TaskForm({
         <div className="grid gap-5 sm:grid-cols-2 sm:gap-3">
           <Controller
             control={form.control}
+            name="type"
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor="task-type">Type</FieldLabel>
+                <TaskTypeSelect
+                  id="task-type"
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  className="w-full"
+                />
+                <FieldError errors={[fieldState.error]} />
+              </Field>
+            )}
+          />
+          {!isEpic && (
+            <Controller
+              control={form.control}
+              name="epic"
+              render={({ field, fieldState }) => (
+                <Field data-invalid={fieldState.invalid}>
+                  <FieldLabel htmlFor="task-epic">Epic</FieldLabel>
+                  <EpicSelect
+                    id="task-epic"
+                    projectId={projectId}
+                    excludeId={task?._id}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    className="w-full"
+                  />
+                  <FieldError errors={[fieldState.error]} />
+                </Field>
+              )}
+            />
+          )}
+        </div>
+
+        <div className="grid gap-5 sm:grid-cols-2 sm:gap-3">
+          <Controller
+            control={form.control}
             name="status"
             render={({ field, fieldState }) => (
               <Field data-invalid={fieldState.invalid}>
                 <FieldLabel htmlFor="task-status">Status</FieldLabel>
                 <TaskStatusSelect
+                  projectId={projectId}
                   id="task-status"
                   value={field.value}
                   onValueChange={field.onChange}
@@ -286,24 +342,32 @@ function TaskForm({
           />
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-[1fr_9rem] sm:gap-3">
-          <Controller
-            control={form.control}
-            name="sprint"
-            render={({ field, fieldState }) => (
-              <Field data-invalid={fieldState.invalid}>
-                <FieldLabel htmlFor="task-sprint">Sprint</FieldLabel>
-                <SprintSelect
-                  id="task-sprint"
-                  projectId={projectId}
-                  value={field.value}
-                  onValueChange={field.onChange}
-                  className="w-full"
-                />
-                <FieldError errors={[fieldState.error]} />
-              </Field>
-            )}
-          />
+        <div
+          className={
+            isEpic
+              ? "grid gap-5 sm:w-36"
+              : "grid gap-5 sm:grid-cols-[1fr_9rem] sm:gap-3"
+          }
+        >
+          {!isEpic && (
+            <Controller
+              control={form.control}
+              name="sprint"
+              render={({ field, fieldState }) => (
+                <Field data-invalid={fieldState.invalid}>
+                  <FieldLabel htmlFor="task-sprint">Sprint</FieldLabel>
+                  <SprintSelect
+                    id="task-sprint"
+                    projectId={projectId}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    className="w-full"
+                  />
+                  <FieldError errors={[fieldState.error]} />
+                </Field>
+              )}
+            />
+          )}
           <Controller
             control={form.control}
             name="storyPoints"

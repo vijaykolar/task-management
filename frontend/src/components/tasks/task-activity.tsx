@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { UserAvatar } from "@/components/common/user-avatar";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
 import { PriorityIcon } from "@/components/tasks/task-fields";
+import { TaskTypeIcon } from "@/components/tasks/task-type";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -12,20 +13,40 @@ import { formatDueDate } from "@/lib/due-date";
 import { displayName, formatDate, formatRelative } from "@/lib/format";
 import { formatPoints } from "@/lib/story-points";
 import { taskPriorityMeta } from "@/lib/task-priority";
+import { taskTypeMeta } from "@/lib/task-type";
 import {
   AvailableTaskPriorities,
-  AvailableTaskStatuses,
+  AvailableTaskTypes,
   type TaskActivity,
   type TaskPriority,
-  type TaskStatus,
+  type TaskType,
 } from "@/types/models";
 
 const Strong = ({ children }: { children: ReactNode }) => (
   <span className="font-medium text-foreground">{children}</span>
 );
 
-const isStatus = (value: unknown): value is TaskStatus =>
-  AvailableTaskStatuses.includes(value as TaskStatus);
+const isStatusKey = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
+const isTaskType = (value: unknown): value is TaskType =>
+  AvailableTaskTypes.includes(value as TaskType);
+
+/** `{ key, name }` snapshot of a linked task or epic */
+const taskRefLabel = (value: unknown) => {
+  if (!value || typeof value !== "object") return null;
+  const { key, name } = value as { key?: string; name?: string };
+  return [key, name].filter(Boolean).join(" ") || null;
+};
+
+const LINK_PHRASES: Record<string, string> = {
+  blocks: "blocks",
+  "blocks:inward": "is blocked by",
+  relates_to: "relates to",
+  "relates_to:inward": "relates to",
+  duplicates: "duplicates",
+  "duplicates:inward": "is duplicated by",
+};
 
 const isPriority = (value: unknown): value is TaskPriority =>
   AvailableTaskPriorities.includes(value as TaskPriority);
@@ -48,8 +69,18 @@ function Priority({ value }: { value: unknown }) {
   );
 }
 
+function TypeName({ value }: { value: unknown }) {
+  if (!isTaskType(value)) return <Strong>{String(value)}</Strong>;
+  return (
+    <span className="inline-flex items-center gap-0.5 font-medium text-foreground">
+      <TaskTypeIcon type={value} className="size-3.5" />
+      {taskTypeMeta[value].label}
+    </span>
+  );
+}
+
 /** Human sentence for one history entry, e.g. "changed status from To do to Done" */
-function describe(entry: TaskActivity): ReactNode {
+function describe(entry: TaskActivity, projectId: string): ReactNode {
   const { type, from, to, name } = entry;
 
   switch (type) {
@@ -68,8 +99,14 @@ function describe(entry: TaskActivity): ReactNode {
       return (
         <span className="inline-flex flex-wrap items-center gap-1">
           changed status
-          {isStatus(from) && <TaskStatusBadge status={from} />}→
-          {isStatus(to) && <TaskStatusBadge status={to} />}
+          {isStatusKey(from) && (
+            <TaskStatusBadge status={from} projectId={projectId} />
+          )}
+          →
+          {isStatusKey(to) && (
+            <TaskStatusBadge status={to} projectId={projectId} />
+          )}
+          {name === "status_removed" && " when its status was removed"}
         </span>
       );
     case "priority_changed":
@@ -200,6 +237,40 @@ function describe(entry: TaskActivity): ReactNode {
         </>
       );
     }
+    case "type_changed":
+      return (
+        <>
+          changed the type from <TypeName value={from} /> to{" "}
+          <TypeName value={to} />
+        </>
+      );
+    case "epic_changed": {
+      const fromEpic = taskRefLabel(from);
+      const toEpic = taskRefLabel(to);
+      if (!toEpic) {
+        return (
+          <>
+            removed this from the epic <Strong>{fromEpic ?? "an epic"}</Strong>
+          </>
+        );
+      }
+      return (
+        <>
+          {name === "created" ? "added this to" : "moved this to"} the epic{" "}
+          <Strong>{toEpic}</Strong>
+        </>
+      );
+    }
+    case "link_added":
+    case "link_removed": {
+      const phrase = LINK_PHRASES[name ?? ""] ?? "is linked to";
+      return (
+        <>
+          {type === "link_added" ? "linked" : "removed the link"}: this {phrase}{" "}
+          <Strong>{taskRefLabel(to) ?? "a deleted task"}</Strong>
+        </>
+      );
+    }
     case "points_changed": {
       const points = (value: unknown) =>
         typeof value === "number" ? formatPoints(value) : null;
@@ -277,7 +348,7 @@ export function TaskActivityList({
               <Strong>
                 {entry.actor ? displayName(entry.actor) : "Someone"}
               </Strong>{" "}
-              {describe(entry)}
+              {describe(entry, projectId)}
               <time
                 className="ml-1.5 text-xs whitespace-nowrap"
                 dateTime={entry.createdAt}

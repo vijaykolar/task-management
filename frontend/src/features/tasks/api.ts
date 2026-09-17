@@ -1,6 +1,12 @@
 import { http } from "@/lib/axios";
 import type {
+  BulkResult,
   MyTasksResponse,
+  SavedFilter,
+  StatusCategory,
+  TaskLink,
+  TaskLinkType,
+  TaskType,
   Paginated,
   SortOrder,
   TaskActivity,
@@ -14,10 +20,16 @@ import type {
 } from "@/types/models";
 
 export type TaskSort =
-  "createdAt" | "updatedAt" | "title" | "dueDate" | "priority";
+  "createdAt" | "updatedAt" | "title" | "dueDate" | "priority" | "key";
 
 export interface TaskListParams extends ListParams<TaskSort> {
+  /** A status key from the workflow */
   status?: TaskStatus;
+  category?: StatusCategory;
+  /** "work" = every type except epics (boards and sprints) */
+  type?: TaskType | "work";
+  /** Epic id or "none" */
+  epic?: string;
   /** "me", "unassigned" or a user id */
   assignee?: string;
   priority?: TaskPriority;
@@ -41,6 +53,9 @@ export interface TaskInput {
   title?: string;
   description?: string;
   status?: TaskStatus;
+  type?: TaskType;
+  /** Epic id; "" removes the task from its epic */
+  epic?: string;
   /** User id; empty string unassigns */
   assignedTo?: string;
   priority?: TaskPriority;
@@ -53,6 +68,25 @@ export interface TaskInput {
   sprint?: string;
   /** New files to attach */
   files?: File[];
+}
+
+export interface LinkInput {
+  type: TaskLinkType;
+  /** Task id or ticket key */
+  target: string;
+  /** inward = "this task is blocked by / duplicated by target" */
+  direction: "outward" | "inward";
+}
+
+export interface BulkChanges {
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  assignedTo?: string;
+  sprint?: string;
+  type?: TaskType;
+  epic?: string;
+  addLabels?: string[];
+  removeLabels?: string[];
 }
 
 export interface SubtaskInput {
@@ -87,6 +121,41 @@ export const tasksApi = {
 
   get: (projectId: string, taskId: string) =>
     http.get<TaskDetail>(`/tasks/${projectId}/t/${taskId}`),
+
+  /** Resolves a ticket key like SPST-12 to its task and project */
+  byKey: (key: string) =>
+    http.get<{ _id: string; key: string; project: string }>(
+      `/tasks/key/${encodeURIComponent(key)}`,
+    ),
+
+  bulk: (
+    projectId: string,
+    body:
+      | { taskIds: string[]; action: "update"; changes: BulkChanges }
+      | { taskIds: string[]; action: "delete" },
+  ) => http.post<BulkResult>(`/tasks/${projectId}/bulk`, body),
+
+  links: (projectId: string, taskId: string) =>
+    http.get<TaskLink[]>(`/tasks/${projectId}/t/${taskId}/links`),
+
+  addLink: (projectId: string, taskId: string, body: LinkInput) =>
+    http.post<TaskLink>(`/tasks/${projectId}/t/${taskId}/links`, body),
+
+  removeLink: (projectId: string, linkId: string) =>
+    http.delete<Record<string, never>>(`/tasks/${projectId}/links/${linkId}`),
+
+  savedFilters: (projectId: string) =>
+    http.get<SavedFilter[]>(`/tasks/${projectId}/filters`),
+
+  saveFilter: (
+    projectId: string,
+    body: { name: string; filters: Record<string, string> },
+  ) => http.post<SavedFilter>(`/tasks/${projectId}/filters`, body),
+
+  deleteFilter: (projectId: string, filterId: string) =>
+    http.delete<Record<string, never>>(
+      `/tasks/${projectId}/filters/${filterId}`,
+    ),
 
   create: (projectId: string, input: TaskInput) =>
     http.post<{ _id: string }>(`/tasks/${projectId}`, toBody(input), {

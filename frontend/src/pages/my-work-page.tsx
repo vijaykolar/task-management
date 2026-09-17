@@ -20,6 +20,7 @@ import {
   PriorityIcon,
 } from "@/components/tasks/task-fields";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
+import { TaskKey, TaskTypeIcon } from "@/components/tasks/task-type";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -64,7 +65,8 @@ const groups: {
   {
     key: "overdue",
     label: "Overdue",
-    match: (t) => t.status !== "done" && dueState(t.dueDate) === "overdue",
+    match: (t) =>
+      t.statusCategory !== "done" && dueState(t.dueDate) === "overdue",
   },
   {
     key: "today",
@@ -132,15 +134,18 @@ function TaskRow({ task }: { task: MyTask }) {
             <span
               className={cn(
                 "block truncate text-sm font-medium",
-                task.status === "done" && "text-muted-foreground line-through",
+                task.statusCategory === "done" &&
+                  "text-muted-foreground line-through",
               )}
             >
               {task.title}
             </span>
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <TaskTypeIcon type={task.type} className="size-3.5" />
+              <TaskKey value={task.key} />
               <span
                 className={cn(
-                  "size-2 rounded-full",
+                  "ml-1 size-2 rounded-full",
                   projectColor(task.project._id),
                 )}
               />
@@ -150,8 +155,14 @@ function TaskRow({ task }: { task: MyTask }) {
         </span>
         <span className="flex flex-wrap items-center gap-2 pl-7 sm:pl-0">
           <LabelList labels={task.labels} max={2} className="hidden lg:flex" />
-          <DueDateBadge dueDate={task.dueDate} done={task.status === "done"} />
-          <TaskStatusBadge status={task.status} />
+          <DueDateBadge
+            dueDate={task.dueDate}
+            done={task.statusCategory === "done"}
+          />
+          <TaskStatusBadge
+            status={task.status}
+            statuses={task.project.statuses}
+          />
         </span>
       </Link>
     </li>

@@ -9,6 +9,13 @@ export const projectSchema = z.object({
     .min(1, "Project name is required")
     .max(80, "Keep the name under 80 characters"),
   description: z.string().trim().max(500, "Keep it under 500 characters"),
+  key: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((value) => value === "" || /^[A-Z][A-Z0-9]{1,9}$/.test(value), {
+      message: "Use 2–10 letters or digits, starting with a letter",
+    }),
 });
 export type ProjectValues = z.infer<typeof projectSchema>;
 

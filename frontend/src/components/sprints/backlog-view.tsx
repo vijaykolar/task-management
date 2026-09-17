@@ -1,4 +1,15 @@
 import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
   CalendarRangeIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
@@ -11,7 +22,7 @@ import {
   UserRoundIcon,
   ZapIcon,
 } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { useState } from "react";
 
 import { UserAvatar } from "@/components/common/user-avatar";
 import {
@@ -25,6 +36,7 @@ import {
   PriorityIcon,
 } from "@/components/tasks/task-fields";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
+import { EpicChip, TaskKey, TaskTypeIcon } from "@/components/tasks/task-type";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,8 +72,13 @@ import { formatPoints } from "@/lib/story-points";
 import { cn } from "@/lib/utils";
 import type { Sprint, TaskListItem } from "@/types/models";
 
-const DRAG_TYPE = "application/x-backlog-task";
 const BACKLOG = "backlog";
+
+interface DragData {
+  task: TaskListItem;
+  /** Sprint id the task is dragged from; "" = backlog */
+  from: string;
+}
 
 interface BacklogViewProps {
   projectId: string;
@@ -98,6 +115,23 @@ export function BacklogView({
   const moveTask = (taskId: string, sprintId: string) =>
     updateTask.mutate({ taskId, sprint: sprintId });
 
+  const [dragged, setDragged] = useState<DragData | null>(null);
+  // A small movement threshold keeps clicks on rows working
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 6 },
+    }),
+  );
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    setDragged(null);
+    const data = active.data.current as DragData | undefined;
+    const target = over?.data.current?.sprintId as string | undefined;
+    if (data && target !== undefined && target !== data.from) {
+      moveTask(data.task._id, target);
+    }
+  };
+
   if (sprints.isPending) {
     return (
       <div className="space-y-4">
@@ -113,156 +147,179 @@ export function BacklogView({
     onOpenTask,
     onMoveTask: moveTask,
     moveTargets: current,
+    dragged,
   };
 
   return (
-    <div className="space-y-4">
-      {canManage && (
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="outline" onClick={() => setCreateOpen(true)}>
-            <ZapIcon />
-            Create sprint
-          </Button>
-          <Button onClick={onCreateTask}>
-            <PlusIcon />
-            New task
-          </Button>
-        </div>
-      )}
+    <DndContext
+      sensors={sensors}
+      onDragStart={({ active }) =>
+        setDragged((active.data.current as DragData) ?? null)
+      }
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setDragged(null)}
+    >
+      <div className="space-y-4">
+        {canManage && (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={() => setCreateOpen(true)}>
+              <ZapIcon />
+              Create sprint
+            </Button>
+            <Button onClick={onCreateTask}>
+              <PlusIcon />
+              New task
+            </Button>
+          </div>
+        )}
 
-      {current.map((sprint) => (
+        {current.map((sprint) => (
+          <TaskSection
+            key={sprint._id}
+            {...sectionProps}
+            sprint={sprint}
+            header={
+              <SprintHeader
+                sprint={sprint}
+                canManage={canManage}
+                canStart={!hasActive}
+                isStarting={
+                  startSprint.isPending &&
+                  startSprint.variables?.sprintId === sprint._id
+                }
+                onStart={() => startSprint.mutate({ sprintId: sprint._id })}
+                onComplete={() => setCompleting(sprint)}
+                onEdit={() => setEditing(sprint)}
+                onDelete={() => setDeleting(sprint)}
+              />
+            }
+          />
+        ))}
+
         <TaskSection
-          key={sprint._id}
           {...sectionProps}
-          sprint={sprint}
+          sprint={null}
           header={
-            <SprintHeader
-              sprint={sprint}
-              canManage={canManage}
-              canStart={!hasActive}
-              isStarting={
-                startSprint.isPending &&
-                startSprint.variables?.sprintId === sprint._id
-              }
-              onStart={() => startSprint.mutate({ sprintId: sprint._id })}
-              onComplete={() => setCompleting(sprint)}
-              onEdit={() => setEditing(sprint)}
-              onDelete={() => setDeleting(sprint)}
-            />
+            <div className="flex items-center gap-2">
+              <InboxIcon className="size-4 text-muted-foreground" />
+              <h3 className="font-medium">Backlog</h3>
+              <span className="text-sm text-muted-foreground">
+                {sprints.data?.backlog.taskCount ?? 0} tasks
+                {!!sprints.data?.backlog.pointCount &&
+                  ` · ${formatPoints(sprints.data.backlog.pointCount)}`}
+              </span>
+            </div>
           }
         />
-      ))}
 
-      <TaskSection
-        {...sectionProps}
-        sprint={null}
-        header={
-          <div className="flex items-center gap-2">
-            <InboxIcon className="size-4 text-muted-foreground" />
-            <h3 className="font-medium">Backlog</h3>
-            <span className="text-sm text-muted-foreground">
-              {sprints.data?.backlog.taskCount ?? 0} tasks
-              {!!sprints.data?.backlog.pointCount &&
-                ` · ${formatPoints(sprints.data.backlog.pointCount)}`}
-            </span>
-          </div>
-        }
-      />
-
-      {completed.length > 0 && (
-        <div className="space-y-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => setShowCompleted((v) => !v)}
-          >
-            <ChevronDownIcon
-              className={cn(
-                "transition-transform",
-                !showCompleted && "-rotate-90",
-              )}
-            />
-            Completed sprints ({completed.length})
-          </Button>
-          {showCompleted &&
-            completed.map((sprint) => (
-              <TaskSection
-                key={sprint._id}
-                {...sectionProps}
-                sprint={sprint}
-                canManage={false}
-                header={
-                  <SprintHeader
-                    sprint={sprint}
-                    canManage={canManage}
-                    canStart={false}
-                    onEdit={() => setEditing(sprint)}
-                    onDelete={() => setDeleting(sprint)}
-                  />
-                }
-              />
-            ))}
-        </div>
-      )}
-
-      {canManage && (
-        <>
-          <SprintFormDialog
-            projectId={projectId}
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-          />
-          <SprintFormDialog
-            projectId={projectId}
-            open={editing !== null}
-            onOpenChange={(open) => !open && setEditing(null)}
-            sprint={editing ?? undefined}
-          />
-          <CompleteSprintDialog
-            key={completing?._id}
-            projectId={projectId}
-            sprint={completing}
-            plannedSprints={planned}
-            onOpenChange={(open) => !open && setCompleting(null)}
-          />
-        </>
-      )}
-
-      <AlertDialog
-        open={deleting !== null}
-        onOpenChange={(open) => !open && setDeleting(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its {deleting?.taskCount ?? 0} tasks move back to the backlog. The
-              tasks themselves are not deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteSprint.isPending}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleteSprint.isPending}
-              onClick={(event) => {
-                event.preventDefault();
-                if (!deleting) return;
-                deleteSprint.mutate(deleting._id, {
-                  onSuccess: () => setDeleting(null),
-                });
-              }}
+        {completed.length > 0 && (
+          <div className="space-y-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => setShowCompleted((v) => !v)}
             >
-              {deleteSprint.isPending && <Spinner />}
-              Delete sprint
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+              <ChevronDownIcon
+                className={cn(
+                  "transition-transform",
+                  !showCompleted && "-rotate-90",
+                )}
+              />
+              Completed sprints ({completed.length})
+            </Button>
+            {showCompleted &&
+              completed.map((sprint) => (
+                <TaskSection
+                  key={sprint._id}
+                  {...sectionProps}
+                  sprint={sprint}
+                  canManage={false}
+                  header={
+                    <SprintHeader
+                      sprint={sprint}
+                      canManage={canManage}
+                      canStart={false}
+                      onEdit={() => setEditing(sprint)}
+                      onDelete={() => setDeleting(sprint)}
+                    />
+                  }
+                />
+              ))}
+          </div>
+        )}
+
+        {canManage && (
+          <>
+            <SprintFormDialog
+              projectId={projectId}
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+            />
+            <SprintFormDialog
+              projectId={projectId}
+              open={editing !== null}
+              onOpenChange={(open) => !open && setEditing(null)}
+              sprint={editing ?? undefined}
+            />
+            <CompleteSprintDialog
+              key={completing?._id}
+              projectId={projectId}
+              sprint={completing}
+              plannedSprints={planned}
+              onOpenChange={(open) => !open && setCompleting(null)}
+            />
+          </>
+        )}
+
+        <AlertDialog
+          open={deleting !== null}
+          onOpenChange={(open) => !open && setDeleting(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Its {deleting?.taskCount ?? 0} tasks move back to the backlog.
+                The tasks themselves are not deleted.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteSprint.isPending}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={deleteSprint.isPending}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (!deleting) return;
+                  deleteSprint.mutate(deleting._id, {
+                    onSuccess: () => setDeleting(null),
+                  });
+                }}
+              >
+                {deleteSprint.isPending && <Spinner />}
+                Delete sprint
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+      <DragOverlay dropAnimation={null}>
+        {dragged && (
+          <ul className="rounded-lg border bg-card shadow-lg">
+            <BacklogRowContent
+              task={dragged.task}
+              projectId={projectId}
+              sectionId={dragged.from}
+              canManage={false}
+              moveTargets={[]}
+            />
+          </ul>
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }
 
@@ -391,6 +448,7 @@ interface TaskSectionProps {
   header: React.ReactNode;
   canManage: boolean;
   moveTargets: Sprint[];
+  dragged: DragData | null;
   onOpenTask: (taskId: string) => void;
   onMoveTask: (taskId: string, sprintId: string) => void;
 }
@@ -402,45 +460,29 @@ function TaskSection({
   header,
   canManage,
   moveTargets,
+  dragged,
   onOpenTask,
   onMoveTask,
 }: TaskSectionProps) {
   const sectionId = sprint?._id ?? "";
   const tasks = useSprintTasks(projectId, sprint?._id ?? BACKLOG);
-  const [isOver, setIsOver] = useState(false);
   const items = tasks.data?.pages.flatMap((page) => page.items) ?? [];
   const total = tasks.data?.pages[0]?.pagination.total ?? 0;
   const acceptsDrops = canManage && sprint?.status !== "completed";
-
-  const handleDrop = (event: DragEvent) => {
-    event.preventDefault();
-    setIsOver(false);
-    const payload = event.dataTransfer.getData(DRAG_TYPE);
-    if (!payload) return;
-    const { taskId, from } = JSON.parse(payload) as {
-      taskId: string;
-      from: string;
-    };
-    if (from !== sectionId) onMoveTask(taskId, sectionId);
-  };
+  const { setNodeRef, isOver } = useDroppable({
+    id: `section-${sectionId || BACKLOG}`,
+    data: { sprintId: sectionId },
+    disabled: !acceptsDrops,
+  });
+  const highlighted = isOver && !!dragged && dragged.from !== sectionId;
 
   return (
     <section
+      ref={setNodeRef}
       className={cn(
         "rounded-xl border bg-card transition-colors",
-        isOver && "border-primary/50 bg-primary/5",
+        highlighted && "border-primary/50 bg-primary/5",
       )}
-      onDragOver={(event) => {
-        if (!acceptsDrops || !event.dataTransfer.types.includes(DRAG_TYPE))
-          return;
-        event.preventDefault();
-        setIsOver(true);
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node))
-          setIsOver(false);
-      }}
-      onDrop={acceptsDrops ? handleDrop : undefined}
     >
       <div className="border-b px-4 py-3">{header}</div>
 
@@ -466,6 +508,7 @@ function TaskSection({
           <BacklogRow
             key={task._id}
             task={task}
+            projectId={projectId}
             sectionId={sectionId}
             canManage={canManage}
             moveTargets={moveTargets}
@@ -493,55 +536,89 @@ function TaskSection({
   );
 }
 
-function BacklogRow({
+interface BacklogRowProps {
+  task: TaskListItem;
+  projectId: string;
+  sectionId: string;
+  canManage: boolean;
+  moveTargets: Sprint[];
+  onOpen?: () => void;
+  onMove?: (sprintId: string) => void;
+}
+
+function BacklogRow(props: BacklogRowProps) {
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: props.task._id,
+    data: { task: props.task, from: props.sectionId } satisfies DragData,
+    disabled: !props.canManage,
+  });
+  return (
+    <BacklogRowContent
+      {...props}
+      rowRef={setNodeRef}
+      // Pointer/touch dragging only; keyboard users move tasks from the menu
+      dragListeners={listeners}
+      isDragging={isDragging}
+    />
+  );
+}
+
+function BacklogRowContent({
   task,
+  projectId,
   sectionId,
   canManage,
   moveTargets,
   onOpen,
   onMove,
-}: {
-  task: TaskListItem;
-  sectionId: string;
-  canManage: boolean;
-  moveTargets: Sprint[];
-  onOpen: () => void;
-  onMove: (sprintId: string) => void;
+  rowRef,
+  dragListeners,
+  isDragging,
+}: BacklogRowProps & {
+  rowRef?: (node: HTMLElement | null) => void;
+  dragListeners?: ReturnType<typeof useDraggable>["listeners"];
+  isDragging?: boolean;
 }) {
+  const isDone = task.statusCategory === "done";
   return (
     <li
-      draggable={canManage}
-      onDragStart={(event) => {
-        event.dataTransfer.setData(
-          DRAG_TYPE,
-          JSON.stringify({ taskId: task._id, from: sectionId }),
-        );
-        event.dataTransfer.effectAllowed = "move";
-      }}
+      ref={rowRef}
+      {...dragListeners}
       className={cn(
         "group/row relative flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-muted/40",
         canManage && "cursor-grab active:cursor-grabbing",
+        isDragging && "opacity-40",
       )}
     >
+      <TaskTypeIcon type={task.type} />
+      <TaskKey
+        value={task.key}
+        className={cn("w-16", isDone && "line-through")}
+      />
       <PriorityIcon priority={task.priority} />
       <button
         type="button"
         onClick={onOpen}
         className={cn(
           "min-w-0 flex-1 truncate text-left font-medium after:absolute after:inset-0 focus-visible:outline-none",
-          task.status === "done" && "text-muted-foreground line-through",
+          isDone && "text-muted-foreground line-through",
         )}
       >
         {task.title}
       </button>
+      <EpicChip epic={task.epic} className="hidden lg:inline-flex" />
       <LabelList labels={task.labels} max={2} className="hidden md:flex" />
       <DueDateBadge
         dueDate={task.dueDate}
-        done={task.status === "done"}
+        done={isDone}
         className="hidden h-5 sm:inline-flex"
       />
       <PointsBadge points={task.storyPoints} />
-      <TaskStatusBadge status={task.status} className="hidden sm:inline-flex" />
+      <TaskStatusBadge
+        status={task.status}
+        projectId={projectId}
+        className="hidden sm:inline-flex"
+      />
       {task.assignedTo ? (
         <UserAvatar user={task.assignedTo} size="sm" />
       ) : (
@@ -556,14 +633,15 @@ function BacklogRow({
         <span className="sr-only">{displayName(task.assignedTo)}</span>
       )}
 
-      {canManage && (
+      {canManage && onMove && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon-xs"
               className="relative z-10 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100"
-              aria-label={`Move ${task.title}`}
+              aria-label={`Move ${task.key}`}
+              onPointerDown={(event) => event.stopPropagation()}
             >
               <EllipsisIcon />
             </Button>

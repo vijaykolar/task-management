@@ -11,13 +11,16 @@ import { useState } from "react";
 import { PaginationControls } from "@/components/common/pagination-controls";
 import { QueryError } from "@/components/common/query-error";
 import { UserAvatar } from "@/components/common/user-avatar";
+import { BulkActionBar } from "@/components/tasks/bulk-action-bar";
 import {
   DueDateBadge,
   LabelList,
   PriorityIcon,
 } from "@/components/tasks/task-fields";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
+import { EpicChip, TaskKey, TaskTypeIcon } from "@/components/tasks/task-type";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Empty,
   EmptyDescription,
@@ -47,6 +50,7 @@ const PAGE_SIZE = 25;
 interface TaskListViewProps {
   projectId: string;
   filters: TaskFilters;
+  canManage: boolean;
   onOpenTask: (taskId: string) => void;
 }
 
@@ -95,8 +99,11 @@ function SortableHead({
 export function TaskListView({
   projectId,
   filters,
+  canManage,
   onOpenTask,
 }: TaskListViewProps) {
+  // Selected task ids; kept across pages so a bulk edit can span them
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   // Column sorting here overrides the toolbar sort
   const [sort, setSort] = useState<TaskSort>(filters.sort ?? "createdAt");
   const [order, setOrder] = useState<SortOrder>(filters.order ?? "desc");
@@ -129,6 +136,26 @@ export function TaskListView({
 
   const items = tasks.data?.items ?? [];
   const headProps = { sort, order, onSort: handleSort };
+  const pageIds = items.map((task) => task._id);
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+
+  const toggle = (taskId: string, checked: boolean) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+
+  const togglePage = (checked: boolean) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const id of pageIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
 
   if (tasks.isError) {
     return (
@@ -150,6 +177,28 @@ export function TaskListView({
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
+              {canManage && (
+                <TableHead className="w-10">
+                  <Checkbox
+                    aria-label="Select all tasks on this page"
+                    checked={
+                      selectedOnPage === 0
+                        ? false
+                        : selectedOnPage === pageIds.length
+                          ? true
+                          : "indeterminate"
+                    }
+                    onCheckedChange={(checked) => togglePage(checked === true)}
+                    disabled={pageIds.length === 0}
+                  />
+                </TableHead>
+              )}
+              <SortableHead
+                label="Key"
+                field="key"
+                className="w-28"
+                {...headProps}
+              />
               <SortableHead
                 label="Priority"
                 field="priority"
@@ -191,7 +240,7 @@ export function TaskListView({
             {tasks.isPending &&
               Array.from({ length: 5 }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={9}>
+                  <TableCell colSpan={canManage ? 11 : 10}>
                     <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
@@ -201,8 +250,32 @@ export function TaskListView({
               <TableRow
                 key={task._id}
                 className="cursor-pointer"
+                data-state={selected.has(task._id) ? "selected" : undefined}
                 onClick={() => onOpenTask(task._id)}
               >
+                {canManage && (
+                  // Clicking the checkbox cell must not open the task
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      aria-label={`Select ${task.key}`}
+                      checked={selected.has(task._id)}
+                      onCheckedChange={(checked) =>
+                        toggle(task._id, checked === true)
+                      }
+                    />
+                  </TableCell>
+                )}
+                <TableCell>
+                  <span className="flex items-center gap-1.5">
+                    <TaskTypeIcon type={task.type} />
+                    <TaskKey
+                      value={task.key}
+                      className={cn(
+                        task.statusCategory === "done" && "line-through",
+                      )}
+                    />
+                  </span>
+                </TableCell>
                 <TableCell>
                   <span className="flex items-center gap-1.5 text-xs">
                     <PriorityIcon priority={task.priority} />
@@ -217,7 +290,7 @@ export function TaskListView({
                     type="button"
                     className={cn(
                       "max-w-md truncate text-left font-medium hover:underline focus-visible:underline focus-visible:outline-none",
-                      task.status === "done" &&
+                      task.statusCategory === "done" &&
                         "text-muted-foreground line-through",
                     )}
                     onClick={(event) => {
@@ -227,6 +300,7 @@ export function TaskListView({
                   >
                     {task.title}
                   </button>
+                  <EpicChip epic={task.epic} className="ml-2 align-middle" />
                   {task.commentCount > 0 && (
                     <span className="ml-2 inline-flex items-center gap-0.5 text-xs text-muted-foreground">
                       <MessageSquareIcon className="size-3" />
@@ -235,7 +309,7 @@ export function TaskListView({
                   )}
                 </TableCell>
                 <TableCell>
-                  <TaskStatusBadge status={task.status} />
+                  <TaskStatusBadge status={task.status} projectId={projectId} />
                 </TableCell>
                 <TableCell>
                   {task.assignedTo ? (
@@ -256,7 +330,7 @@ export function TaskListView({
                   {task.dueDate ? (
                     <DueDateBadge
                       dueDate={task.dueDate}
-                      done={task.status === "done"}
+                      done={task.statusCategory === "done"}
                     />
                   ) : (
                     <span className="text-muted-foreground">—</span>
@@ -302,6 +376,14 @@ export function TaskListView({
         isFetching={tasks.isFetching}
         itemLabel="tasks"
       />
+
+      {canManage && selected.size > 0 && (
+        <BulkActionBar
+          projectId={projectId}
+          selectedIds={[...selected]}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
     </div>
   );
 }

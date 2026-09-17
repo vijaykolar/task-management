@@ -6,27 +6,39 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { taskStatusMeta } from "@/lib/task-status";
+import { useProjectWorkflow } from "@/features/projects/hooks";
+import { describeStatus, statusCategoryMeta } from "@/lib/task-status";
 import { cn } from "@/lib/utils";
-import { AvailableTaskStatuses, type TaskStatus } from "@/types/models";
+import type { ProjectStatus, TaskStatus } from "@/types/models";
 
+/**
+ * A status pill. Names come from the project's workflow: pass `statuses` when
+ * you already have them (e.g. cross-project lists), otherwise `projectId`.
+ */
 export function TaskStatusBadge({
   status,
+  projectId,
+  statuses,
   className,
 }: {
   status: TaskStatus;
+  projectId?: string;
+  statuses?: ProjectStatus[];
   className?: string;
 }) {
-  const { label, icon: Icon, className: tone } = taskStatusMeta[status];
+  const workflow = useProjectWorkflow(statuses ? undefined : projectId);
+  const { name, category } = describeStatus(statuses ?? workflow.all, status);
+  const { icon: Icon, className: tone } = statusCategoryMeta[category];
   return (
     <Badge variant="outline" className={cn(tone, className)}>
       <Icon data-icon="inline-start" />
-      {label}
+      {name}
     </Badge>
   );
 }
 
 interface TaskStatusSelectProps {
+  projectId: string;
   value: TaskStatus;
   onValueChange: (status: TaskStatus) => void;
   id?: string;
@@ -36,7 +48,9 @@ interface TaskStatusSelectProps {
   "aria-label"?: string;
 }
 
+/** Picks a status from the project's workflow, in board order */
 export function TaskStatusSelect({
+  projectId,
   value,
   onValueChange,
   size,
@@ -44,22 +58,26 @@ export function TaskStatusSelect({
   disabled,
   ...props
 }: TaskStatusSelectProps) {
+  const workflow = useProjectWorkflow(projectId);
+  const current = workflow.describe(value);
+
   return (
     <Select
       value={value}
-      onValueChange={(v) => onValueChange(v as TaskStatus)}
-      disabled={disabled}
+      onValueChange={onValueChange}
+      disabled={disabled || workflow.isPending}
     >
       <SelectTrigger size={size} className={className} {...props}>
-        <SelectValue />
+        <SelectValue placeholder={current.name} />
       </SelectTrigger>
       <SelectContent position="popper">
-        {AvailableTaskStatuses.map((status) => {
-          const { label, icon: Icon } = taskStatusMeta[status];
+        {workflow.statuses.map((status) => {
+          const { icon: Icon, iconClassName } =
+            statusCategoryMeta[status.category];
           return (
-            <SelectItem key={status} value={status}>
-              <Icon />
-              {label}
+            <SelectItem key={status.key} value={status.key}>
+              <Icon className={iconClassName} />
+              {status.name}
             </SelectItem>
           );
         })}

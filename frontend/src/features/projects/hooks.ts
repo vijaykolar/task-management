@@ -6,14 +6,18 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
+import { useMemo } from "react";
+
 import {
   projectsApi,
   type AddMemberInput,
   type MemberListParams,
   type ProjectInput,
   type ProjectListParams,
+  type WorkflowInput,
 } from "@/features/projects/api";
 import { queryKeys } from "@/lib/query-keys";
+import { describeStatus } from "@/lib/task-status";
 import type {
   Paginated,
   ProjectDetail,
@@ -53,6 +57,42 @@ export function useProject(projectId: string | undefined) {
     queryKey: queryKeys.projects.detail(projectId ?? ""),
     queryFn: () => projectsApi.get(projectId!).then((res) => res.data),
     enabled: !!projectId,
+  });
+}
+
+/**
+ * A project's workflow: `statuses` are the board columns in order, `all`
+ * includes archived ones (for history), `describe` names any status key.
+ */
+export function useProjectWorkflow(projectId: string | undefined) {
+  const { data, isPending } = useProject(projectId);
+  return useMemo(() => {
+    const all = data?.statuses ?? [];
+    return {
+      isPending,
+      all,
+      statuses: all.filter((status) => !status.archived),
+      describe: (key: string) => describeStatus(all, key),
+    };
+  }, [data?.statuses, isPending]);
+}
+
+export function useUpdateWorkflow(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: WorkflowInput) =>
+      projectsApi.updateWorkflow(projectId, body).then((res) => res.data),
+    meta: { silent: true, successMessage: "Workflow saved" },
+    onSuccess: (statuses) => {
+      queryClient.setQueryData<ProjectDetail>(
+        queryKeys.projects.detail(projectId),
+        (current) => (current ? { ...current, statuses } : current),
+      );
+      // Tasks may have moved out of removed statuses
+      return queryClient.invalidateQueries({
+        queryKey: queryKeys.tasks.project(projectId),
+      });
+    },
   });
 }
 

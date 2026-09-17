@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  type BulkChanges,
+  type LinkInput,
   type MyTaskParams,
   tasksApi,
   type SubtaskInput,
@@ -16,7 +18,9 @@ import {
   type TaskListParams,
 } from "@/features/tasks/api";
 import { queryKeys } from "@/lib/query-keys";
+import { describeStatus } from "@/lib/task-status";
 import type {
+  ProjectDetail,
   TaskDetail,
   TaskListItem,
   TasksResponse,
@@ -71,7 +75,7 @@ function findCachedTask(
 
 // ---------- Tasks ----------
 
-/** One board column: tasks with a given status, loaded 20 at a time */
+/** One board column: tasks in a workflow status, loaded 20 at a time */
 export function useTaskColumn(
   projectId: string,
   status: TaskStatus,
@@ -110,7 +114,14 @@ export function useTask(projectId: string, taskId: string | null) {
     placeholderData: () => {
       const item = taskId && findCachedTask(queryClient, projectId, taskId);
       return item
-        ? { ...item, assignedBy: undefined, attachments: [], subtasks: [] }
+        ? {
+            ...item,
+            assignedBy: undefined,
+            attachments: [],
+            subtasks: [],
+            childCount: 0,
+            doneChildCount: 0,
+          }
         : undefined;
     },
   });
@@ -142,7 +153,13 @@ export function useUpdateTask(projectId: string) {
       const columns = getColumns(queryClient, projectId);
       const task = findCachedTask(queryClient, projectId, taskId);
       if (!task) return undefined;
-      const moved: TaskListItem = { ...task, status };
+      const { category: statusCategory } = describeStatus(
+        queryClient.getQueryData<ProjectDetail>(
+          queryKeys.projects.detail(projectId),
+        )?.statuses,
+        status,
+      );
+      const moved: TaskListItem = { ...task, status, statusCategory };
 
       for (const { key, data, params } of columns) {
         if (!data) continue;
@@ -151,7 +168,7 @@ export function useUpdateTask(projectId: string) {
           queryClient.setQueryData<TasksResponse>(key, {
             ...data,
             items: data.items.map((item) =>
-              item._id === taskId ? { ...item, status } : item,
+              item._id === taskId ? moved : item,
             ),
           });
           continue;
@@ -182,7 +199,7 @@ export function useUpdateTask(projectId: string) {
 
       queryClient.setQueryData<TaskDetail>(
         queryKeys.tasks.detail(projectId, taskId),
-        (detail) => (detail ? { ...detail, status } : detail),
+        (detail) => (detail ? { ...detail, status, statusCategory } : detail),
       );
       return { columns };
     },
@@ -329,6 +346,8 @@ export function useTaskPage(projectId: string, params: TaskListParams) {
 export function useSprintTasks(projectId: string, sprint: string) {
   const params = {
     sprint,
+    // Epics sit above sprints, so plan work items only
+    type: "work",
     sort: "priority",
     order: "desc",
     limit: 25,
@@ -351,5 +370,133 @@ export function useMyTasks(params: MyTaskParams) {
     queryKey: queryKeys.myWork.list(params),
     queryFn: () => tasksApi.mine(params).then((res) => res.data),
     placeholderData: keepPreviousData,
+  });
+}
+
+// ---------- Epics, links & pickers ----------
+
+/** Every epic in the project, for pickers and filters */
+export function useEpics(projectId: string) {
+  return useQuery({
+    queryKey: queryKeys.tasks.epics(projectId),
+    queryFn: () =>
+      tasksApi
+        .list(projectId, {
+          type: "epic",
+          sort: "key",
+          order: "asc",
+          limit: 100,
+        })
+        .then((res) => res.data.items),
+    staleTime: 60 * 1000,
+  });
+}
+
+/** Tasks matching a search (title or ticket key), for linking */
+export function useTaskPicker(projectId: string, search: string) {
+  return useQuery({
+    queryKey: queryKeys.tasks.picker(projectId, search),
+    queryFn: () =>
+      tasksApi
+        .list(projectId, {
+          search: search || undefined,
+          sort: "updatedAt",
+          limit: 8,
+        })
+        .then((res) => res.data.items),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useTaskLinks(projectId: string, taskId: string) {
+  return useQuery({
+    queryKey: queryKeys.tasks.links(projectId, taskId),
+    queryFn: () => tasksApi.links(projectId, taskId).then((res) => res.data),
+  });
+}
+
+export function useAddTaskLink(projectId: string, taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LinkInput) =>
+      tasksApi.addLink(projectId, taskId, input).then((res) => res.data),
+    meta: { successMessage: "Link added" },
+    onSuccess: () => invalidateProjectTasks(queryClient, projectId),
+  });
+}
+
+export function useRemoveTaskLink(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (linkId: string) => tasksApi.removeLink(projectId, linkId),
+    meta: { successMessage: "Link removed" },
+    onSuccess: () => invalidateProjectTasks(queryClient, projectId),
+  });
+}
+
+// ---------- Bulk edits ----------
+
+export function useBulkUpdateTasks(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      taskIds,
+      changes,
+    }: {
+      taskIds: string[];
+      changes: BulkChanges;
+    }) =>
+      tasksApi
+        .bulk(projectId, { taskIds, action: "update", changes })
+        .then((res) => res.data),
+    meta: { silent: true },
+    onSettled: () => invalidateProjectTasks(queryClient, projectId),
+  });
+}
+
+export function useBulkDeleteTasks(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (taskIds: string[]) =>
+      tasksApi
+        .bulk(projectId, { taskIds, action: "delete" })
+        .then((res) => res.data),
+    meta: { silent: true },
+    onSettled: () => invalidateProjectTasks(queryClient, projectId),
+  });
+}
+
+// ---------- Saved filters ----------
+
+export function useSavedFilters(projectId: string) {
+  return useQuery({
+    queryKey: queryKeys.tasks.savedFilters(projectId),
+    queryFn: () => tasksApi.savedFilters(projectId).then((res) => res.data),
+  });
+}
+
+export function useSaveFilter(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; filters: Record<string, string> }) =>
+      tasksApi.saveFilter(projectId, body).then((res) => res.data),
+    meta: { silent: true, successMessage: "Filter saved" },
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.tasks.savedFilters(projectId),
+      }),
+  });
+}
+
+export function useDeleteSavedFilter(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (filterId: string) =>
+      tasksApi.deleteFilter(projectId, filterId),
+    meta: { successMessage: "Filter deleted" },
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.tasks.savedFilters(projectId),
+      }),
   });
 }

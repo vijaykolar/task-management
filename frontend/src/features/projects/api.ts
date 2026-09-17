@@ -7,13 +7,24 @@ import type {
   ProjectDetail,
   ProjectInvite,
   ProjectMember,
+  ProjectStatus,
   ProjectsResponse,
+  StatusCategory,
   UserRole,
 } from "@/types/models";
 
 export interface ProjectInput {
   name: string;
   description?: string;
+  /** Ticket key prefix; empty = generated from the name */
+  key?: string;
+}
+
+export interface WorkflowInput {
+  /** Board order; statuses without a key are new */
+  statuses: { key?: string; name: string; category: StatusCategory }[];
+  /** Where tasks in removed statuses go: removed key -> remaining key */
+  moves?: Record<string, string>;
 }
 
 export interface AddMemberInput {
@@ -42,6 +53,9 @@ export const projectsApi = {
     http.put<Project>(`/projects/${projectId}`, body),
 
   remove: (projectId: string) => http.delete<Project>(`/projects/${projectId}`),
+
+  updateWorkflow: (projectId: string, body: WorkflowInput) =>
+    http.put<ProjectStatus[]>(`/projects/${projectId}/statuses`, body),
 
   leave: (projectId: string) =>
     http.post<Record<string, never>>(`/projects/${projectId}/leave`),

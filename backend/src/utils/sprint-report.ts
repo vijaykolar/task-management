@@ -9,8 +9,14 @@ import {
   TaskActivity,
   TaskActivityTypeEnum,
 } from "../models/taskactivity.models.js";
+import { Project } from "../models/project.models.js";
 import { Task } from "../models/task.models.js";
-import { TaskStatusEnum, type TaskStatus } from "./constants.js";
+import {
+  StatusCategoryEnum,
+  TaskStatusEnum,
+  type TaskStatus,
+} from "./constants.js";
+import { categoryLookup, projectStatuses } from "./workflow.js";
 
 /**
  * Sprint reports are rebuilt from task history. Each task's state over time is
@@ -42,6 +48,7 @@ interface ReportEvent {
 
 export interface ReportTask {
   _id: string;
+  key?: string;
   title: string;
   status: TaskStatus;
   storyPoints: number | null;
@@ -245,6 +252,7 @@ const isIn = (state: TaskState) => state.exists && state.inSprint;
 
 interface LoadedTask {
   id: string;
+  key?: string;
   title: string;
   deleted: boolean;
   timeline: Segment[];
@@ -283,7 +291,7 @@ const loadTasks = async (sprint: SprintDocument): Promise<LoadedTask[]> => {
   const [tasks, events] = await Promise.all([
     Task.find(
       { _id: { $in: taskIds } },
-      "title status storyPoints sprint",
+      "key title status storyPoints sprint",
     ).lean(),
     TaskActivity.find(
       { task: { $in: taskIds }, type: { $in: REPORT_ACTIVITY_TYPES } },
@@ -314,6 +322,7 @@ const loadTasks = async (sprint: SprintDocument): Promise<LoadedTask[]> => {
     if (task) {
       return {
         id,
+        key: task.key,
         title: task.title,
         deleted: false,
         timeline: buildTimeline(
@@ -332,10 +341,13 @@ const loadTasks = async (sprint: SprintDocument): Promise<LoadedTask[]> => {
     // Deleted: its last known values come from the deletion record
     const deletion = taskEvents.findLast(
       (event) => event.type === TaskActivityTypeEnum.DELETED,
-    )?.from as { title?: string; status?: TaskStatus } | undefined;
+    )?.from as
+      | { title?: string; key?: string; status?: TaskStatus }
+      | undefined;
     const snapshot = snapshotById.get(id);
     return {
       id,
+      key: deletion?.key,
       title: deletion?.title ?? "Deleted task",
       deleted: true,
       timeline: buildTimeline(
@@ -373,7 +385,14 @@ export const buildSprintReport = async (
   const snapshot = sprint.startSnapshot;
   const approximate = !snapshot;
 
-  const tasks = await loadTasks(sprint);
+  const [tasks, project] = await Promise.all([
+    loadTasks(sprint),
+    Project.findById(sprint.project, "statuses").lean(),
+  ]);
+  // Statuses are per project; "done" means a status in the Done category
+  const categoryOf = categoryLookup(projectStatuses(project ?? {}));
+  const isDone = (status: TaskStatus) =>
+    categoryOf(status) === StatusCategoryEnum.DONE;
   const snapshotById = new Map(
     (snapshot ?? []).map((entry) => [String(entry.task), entry]),
   );
@@ -436,6 +455,7 @@ export const buildSprintReport = async (
     const finalState: TaskState = lastIn ?? { ...endState, ...startState };
     const reportTask: ReportTask = {
       _id: task.id,
+      key: task.key,
       title: task.title,
       status: (inAtEnd ? endState : finalState).status,
       storyPoints: (inAtEnd ? endState : finalState).points,
@@ -446,7 +466,7 @@ export const buildSprintReport = async (
       addTo(committed, startState.points);
       estimateDelta +=
         (lastIn?.points ?? startState.points ?? 0) - (startState.points ?? 0);
-      if (startState.status === TaskStatusEnum.DONE) {
+      if (isDone(startState.status)) {
         addTo(startDone, startState.points);
         reportTask.doneAtStart = true;
       }
@@ -460,7 +480,7 @@ export const buildSprintReport = async (
 
     if (inAtEnd) {
       if (endState.points === null) unestimated += 1;
-      if (endState.status === TaskStatusEnum.DONE) {
+      if (isDone(endState.status)) {
         addTo(completed, endState.points);
         lists.completed.push(reportTask);
       } else {
@@ -531,7 +551,7 @@ export const buildSprintReport = async (
         const state = stateAt(task.timeline, time);
         if (!isIn(state)) continue;
         addTo(scope, state.points);
-        if (state.status === TaskStatusEnum.DONE) addTo(done, state.points);
+        if (isDone(state.status)) addTo(done, state.points);
       }
       series.push({
         date: key,

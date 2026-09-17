@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { UserAvatar } from "@/components/common/user-avatar";
+import { WorkflowSettings } from "@/components/projects/workflow-settings";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,6 +55,7 @@ export function ProjectSettings({
 }: ProjectSettingsProps) {
   const canEdit = can(project.role, "project:update");
   const canDelete = can(project.role, "project:delete");
+  const canManageWorkflow = can(project.role, "task:manage");
 
   return (
     <div className="space-y-4">
@@ -66,7 +68,12 @@ export function ProjectSettings({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
-            <p className="font-medium">{project.name}</p>
+            <p className="font-medium">
+              {project.name}
+              <span className="ml-2 font-mono text-xs text-muted-foreground">
+                {project.key}
+              </span>
+            </p>
             <p className="text-muted-foreground">
               {project.description || "No description"}
             </p>
@@ -79,6 +86,13 @@ export function ProjectSettings({
           </CardFooter>
         </Card>
       )}
+
+      <WorkflowSettings
+        // Reset the editor when the saved workflow changes elsewhere
+        key={JSON.stringify(project.statuses)}
+        project={project}
+        canEdit={canManageWorkflow}
+      />
 
       {project.isOwner ? (
         <TransferOwnershipCard project={project} />

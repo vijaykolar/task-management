@@ -2,6 +2,7 @@ import { ChevronRightIcon } from "lucide-react";
 import { Link } from "react-router";
 
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
+import { TaskKey } from "@/components/tasks/task-type";
 import { Progress } from "@/components/ui/progress";
 import { formatDate } from "@/lib/format";
 import { formatPoints } from "@/lib/story-points";
@@ -109,6 +110,10 @@ function TaskRows({
           key={task._id}
           className="flex items-center gap-3 px-4 py-2.5 text-sm"
         >
+          <TaskKey
+            value={task.key}
+            className={cn("w-16", task.deleted && "line-through")}
+          />
           {task.deleted ? (
             <span
               className="min-w-0 flex-1 truncate text-muted-foreground line-through"
@@ -131,6 +136,7 @@ function TaskRows({
           )}
           <TaskStatusBadge
             status={task.status}
+            projectId={projectId}
             className="hidden sm:inline-flex"
           />
           <span

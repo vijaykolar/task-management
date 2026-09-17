@@ -1,4 +1,16 @@
 import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  BanIcon,
   CheckSquareIcon,
   EllipsisIcon,
   MessageSquareIcon,
@@ -8,7 +20,7 @@ import {
   Trash2Icon,
   UserRoundIcon,
 } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { useState } from "react";
 
 import { UserAvatar } from "@/components/common/user-avatar";
 import { Button } from "@/components/ui/button";
@@ -35,23 +47,13 @@ import {
   PointsBadge,
   PriorityIcon,
 } from "@/components/tasks/task-fields";
+import { EpicChip, TaskKey, TaskTypeIcon } from "@/components/tasks/task-type";
+import { useProjectWorkflow } from "@/features/projects/hooks";
 import { useTaskColumn, type TaskFilters } from "@/features/tasks/hooks";
 import { displayName, formatRelative } from "@/lib/format";
-import { taskStatusMeta } from "@/lib/task-status";
+import { statusCategoryMeta } from "@/lib/task-status";
 import { cn } from "@/lib/utils";
-import {
-  AvailableTaskStatuses,
-  type TaskListItem,
-  type TaskStatus,
-} from "@/types/models";
-
-const DRAG_TYPE = "application/x-task";
-
-interface DraggedTask {
-  id: string;
-  title: string;
-  status: TaskStatus;
-}
+import type { ProjectStatus, TaskListItem, TaskStatus } from "@/types/models";
 
 export interface TaskBoardHandlers {
   onOpen: (task: TaskListItem) => void;
@@ -70,33 +72,78 @@ interface TaskBoardProps extends TaskBoardHandlers {
   canManage: boolean;
 }
 
+/** One column per workflow status; drag cards between columns to move them */
 export function TaskBoard({ projectId, filters, ...props }: TaskBoardProps) {
-  const [dragging, setDragging] = useState<DraggedTask | null>(null);
+  const workflow = useProjectWorkflow(projectId);
+  const [dragged, setDragged] = useState<TaskListItem | null>(null);
+
+  // A small movement threshold keeps clicks on cards working
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 6 },
+    }),
+  );
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    setDragged(null);
+    const task = active.data.current?.task as TaskListItem | undefined;
+    const status = over?.id as TaskStatus | undefined;
+    if (task && status && status !== task.status) props.onMove(task, status);
+  };
+
+  if (workflow.isPending) {
+    return (
+      <div className="flex gap-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className="h-64 min-w-72 flex-1 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="grid items-start gap-4 md:grid-cols-3">
-      {AvailableTaskStatuses.map((status) => (
-        <TaskColumn
-          key={status}
-          projectId={projectId}
-          status={status}
-          filters={filters}
-          dragging={dragging}
-          setDragging={setDragging}
-          {...props}
-        />
-      ))}
-    </div>
+    <DndContext
+      sensors={sensors}
+      onDragStart={({ active }) =>
+        setDragged((active.data.current?.task as TaskListItem) ?? null)
+      }
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setDragged(null)}
+    >
+      {/* Wide workflows scroll sideways instead of squeezing columns */}
+      <div className="-mx-1 flex items-start gap-4 overflow-x-auto px-1 pb-2">
+        {workflow.statuses.map((status) => (
+          <TaskColumn
+            key={status.key}
+            projectId={projectId}
+            status={status}
+            filters={filters}
+            dragged={dragged}
+            {...props}
+          />
+        ))}
+      </div>
+      <DragOverlay dropAnimation={null}>
+        {dragged && (
+          <TaskCard
+            task={dragged}
+            canManage={false}
+            statuses={workflow.statuses}
+            className="rotate-2 cursor-grabbing shadow-lg"
+          />
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }
 
 interface TaskColumnProps extends TaskBoardHandlers {
   projectId: string;
-  status: TaskStatus;
+  status: ProjectStatus;
   filters: TaskFilters;
   canManage: boolean;
-  dragging: DraggedTask | null;
-  setDragging: (task: DraggedTask | null) => void;
+  dragged: TaskListItem | null;
 }
 
 /** One status column; loads its own tasks 20 at a time */
@@ -105,61 +152,38 @@ function TaskColumn({
   status,
   filters,
   canManage,
-  dragging,
-  setDragging,
+  dragged,
   onOpen,
   onCreate,
   onEdit,
   onDelete,
   onMove,
 }: TaskColumnProps) {
-  const meta = taskStatusMeta[status];
-  const column = useTaskColumn(projectId, status, filters);
-  const [isOver, setIsOver] = useState(false);
+  const workflow = useProjectWorkflow(projectId);
+  const meta = statusCategoryMeta[status.category];
+  const column = useTaskColumn(projectId, status.key, filters);
+  const canDrop = canManage && !!dragged && dragged.status !== status.key;
+  const { setNodeRef, isOver } = useDroppable({
+    id: status.key,
+    disabled: !canManage,
+  });
 
   const tasks = column.data?.pages.flatMap((page) => page.items) ?? [];
   const total = column.data?.pages[0]?.pagination.total;
-  const canDrop = canManage && dragging !== null && dragging.status !== status;
-
-  const handleDrop = (event: DragEvent) => {
-    event.preventDefault();
-    setIsOver(false);
-    setDragging(null);
-    try {
-      const task = JSON.parse(
-        event.dataTransfer.getData(DRAG_TYPE),
-      ) as DraggedTask;
-      if (task.status !== status) {
-        onMove({ _id: task.id, title: task.title }, status);
-      }
-    } catch {
-      // Not a task drag
-    }
-  };
+  const highlighted = isOver && canDrop;
 
   return (
     <section
-      aria-label={meta.label}
+      ref={setNodeRef}
+      aria-label={status.name}
       className={cn(
-        "flex min-h-40 flex-col rounded-xl border bg-muted/40 p-2 transition-colors",
-        isOver && canDrop && "border-primary/50 bg-primary/5",
+        "flex min-h-40 min-w-72 flex-1 flex-col rounded-xl border bg-muted/40 p-2 transition-colors",
+        highlighted && "border-primary/50 bg-primary/5",
       )}
-      onDragOver={(event) => {
-        if (!canDrop) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-        setIsOver(true);
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
-          setIsOver(false);
-        }
-      }}
-      onDrop={handleDrop}
     >
       <header className="flex items-center gap-2 px-2 py-1.5">
         <span className={cn("size-2 rounded-full", meta.dotClassName)} />
-        <h3 className="text-sm font-medium">{meta.label}</h3>
+        <h3 className="truncate text-sm font-medium">{status.name}</h3>
         <span className="rounded-full bg-background px-1.5 text-xs text-muted-foreground tabular-nums">
           {total ?? "–"}
         </span>
@@ -171,8 +195,8 @@ function TaskColumn({
             variant="ghost"
             size="icon-xs"
             className="ml-auto"
-            onClick={() => onCreate(status)}
-            aria-label={`Add task to ${meta.label}`}
+            onClick={() => onCreate(status.key)}
+            aria-label={`Add task to ${status.name}`}
           >
             <PlusIcon />
           </Button>
@@ -181,7 +205,7 @@ function TaskColumn({
 
       <div className="flex flex-1 flex-col gap-2 p-1">
         {column.isPending &&
-          Array.from({ length: status === "todo" ? 3 : 2 }, (_, i) => (
+          Array.from({ length: 2 }, (_, i) => (
             <div key={i} className="space-y-3 rounded-lg border bg-card p-3">
               <Skeleton className="h-4 w-3/4" />
               <Skeleton className="h-3 w-full" />
@@ -207,29 +231,15 @@ function TaskColumn({
         )}
 
         {tasks.map((task) => (
-          <TaskCard
+          <DraggableTaskCard
             key={task._id}
             task={task}
             canManage={canManage}
-            isDragging={dragging?.id === task._id}
+            statuses={workflow.statuses}
             onOpen={() => onOpen(task)}
             onEdit={() => onEdit(task)}
             onDelete={() => onDelete(task)}
             onMove={(next) => onMove(task, next)}
-            onDragStart={(event) => {
-              const payload: DraggedTask = {
-                id: task._id,
-                title: task.title,
-                status: task.status,
-              };
-              event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload));
-              event.dataTransfer.effectAllowed = "move";
-              setDragging(payload);
-            }}
-            onDragEnd={() => {
-              setDragging(null);
-              setIsOver(false);
-            }}
           />
         ))}
 
@@ -237,7 +247,7 @@ function TaskColumn({
           <div
             className={cn(
               "flex flex-1 items-center justify-center rounded-lg border border-dashed p-6 text-xs text-muted-foreground",
-              isOver && canDrop && "border-primary/50 text-primary",
+              highlighted && "border-primary/50 text-primary",
             )}
           >
             {canDrop ? "Drop here" : "No tasks"}
@@ -264,46 +274,61 @@ function TaskColumn({
 interface TaskCardProps {
   task: TaskListItem;
   canManage: boolean;
-  isDragging: boolean;
-  onOpen: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  onMove: (status: TaskStatus) => void;
-  onDragStart: (event: DragEvent) => void;
-  onDragEnd: () => void;
+  statuses: ProjectStatus[];
+  className?: string;
+  onOpen?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  onMove?: (status: TaskStatus) => void;
+}
+
+function DraggableTaskCard(props: TaskCardProps) {
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: props.task._id,
+    data: { task: props.task },
+    disabled: !props.canManage,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      // Pointer/touch dragging only; keyboard users move cards from the menu
+      {...listeners}
+      className={cn(
+        props.canManage && "cursor-grab",
+        isDragging && "opacity-40",
+      )}
+    >
+      <TaskCard {...props} />
+    </div>
+  );
 }
 
 function TaskCard({
   task,
   canManage,
-  isDragging,
+  statuses,
+  className,
   onOpen,
   onEdit,
   onDelete,
   onMove,
-  onDragStart,
-  onDragEnd,
 }: TaskCardProps) {
   const allSubtasksDone =
     task.subtaskCount > 0 && task.completedSubtaskCount === task.subtaskCount;
+  const isDone = task.statusCategory === "done";
 
   return (
     <article
-      draggable={canManage}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
       className={cn(
         "group/task relative space-y-2 rounded-lg border bg-card p-3 shadow-xs transition-all hover:border-foreground/20 hover:shadow-sm",
-        canManage && "cursor-grab active:cursor-grabbing",
-        isDragging && "rotate-1 opacity-50",
+        className,
       )}
     >
       <div className="flex items-start gap-2">
-        <PriorityIcon priority={task.priority} className="mt-0.5" />
         <h4
           className={cn(
             "min-w-0 flex-1 text-sm leading-snug font-medium wrap-break-word",
-            task.status === "done" && "text-muted-foreground line-through",
+            isDone && "text-muted-foreground line-through",
           )}
         >
           {/* Stretched button: the whole card opens the task */}
@@ -316,29 +341,30 @@ function TaskCard({
           </button>
         </h4>
 
-        {canManage && (
+        {canManage && onMove && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon-xs"
                 className="relative z-10 -mt-0.5 -mr-1 opacity-0 group-hover/task:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100"
-                aria-label={`Actions for ${task.title}`}
+                aria-label={`Actions for ${task.key}`}
+                onPointerDown={(event) => event.stopPropagation()}
               >
                 <EllipsisIcon />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Move to
               </DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 value={task.status}
-                onValueChange={(v) => onMove(v as TaskStatus)}
+                onValueChange={(v) => onMove(v)}
               >
-                {AvailableTaskStatuses.map((status) => (
-                  <DropdownMenuRadioItem key={status} value={status}>
-                    {taskStatusMeta[status].label}
+                {statuses.map((status) => (
+                  <DropdownMenuRadioItem key={status.key} value={status.key}>
+                    {status.name}
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
@@ -356,24 +382,32 @@ function TaskCard({
         )}
       </div>
 
-      {task.description && (
-        <p className="line-clamp-2 text-xs text-muted-foreground">
-          {task.description}
-        </p>
+      {(task.epic || task.blockedByCount > 0) && (
+        <div className="flex flex-wrap items-center gap-1">
+          <EpicChip epic={task.epic} />
+          {task.blockedByCount > 0 && (
+            <span
+              className="inline-flex h-5 items-center gap-1 rounded-md bg-red-500/10 px-1.5 text-xs text-red-700 dark:text-red-400"
+              title={`Blocked by ${task.blockedByCount} unfinished ${task.blockedByCount === 1 ? "task" : "tasks"}`}
+            >
+              <BanIcon className="size-3" />
+              Blocked
+            </span>
+          )}
+        </div>
       )}
 
       {(task.dueDate || task.labels.length > 0) && (
         <div className="flex flex-wrap items-center gap-1">
-          <DueDateBadge
-            dueDate={task.dueDate}
-            done={task.status === "done"}
-            className="h-5"
-          />
+          <DueDateBadge dueDate={task.dueDate} done={isDone} className="h-5" />
           <LabelList labels={task.labels} max={3} />
         </div>
       )}
 
-      <div className="flex items-center gap-3 pt-1 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
+        <TaskTypeIcon type={task.type} className="size-3.5" />
+        <TaskKey value={task.key} className={cn(isDone && "line-through")} />
+        <PriorityIcon priority={task.priority} className="size-3.5" />
         {task.subtaskCount > 0 && (
           <span
             className={cn(
@@ -399,7 +433,9 @@ function TaskCard({
           </span>
         )}
         {!task.subtaskCount && !task.commentCount && !task.attachmentCount && (
-          <span title="Last updated">{formatRelative(task.updatedAt)}</span>
+          <span title="Last updated" className="hidden truncate sm:inline">
+            {formatRelative(task.updatedAt)}
+          </span>
         )}
 
         <span className="ml-auto flex items-center gap-2">

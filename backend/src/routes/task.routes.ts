@@ -1,5 +1,13 @@
 import { Router } from "express";
 import {
+  addTaskLink,
+  bulkUpdateTasks,
+  deleteSavedFilter,
+  deleteTaskLink,
+  getSavedFilters,
+  getTaskByKey,
+  getTaskLinks,
+  saveFilter,
   getMyTasks,
   addTaskComment,
   deleteTaskComment,
@@ -26,6 +34,9 @@ import { broadcastProjectChange } from "../middlewares/realtime.middleware.js";
 import { validate } from "../middlewares/validator.middleware.js";
 import { AvailableUserRole, UserRolesEnum } from "../utils/constants.js";
 import {
+  bulkTaskValidator,
+  savedFilterValidator,
+  taskLinkValidator,
   commentValidator,
   createSubtaskValidator,
   createTaskValidator,
@@ -43,6 +54,7 @@ router.use(verifyJWT);
 
 // Must come before /:projectId
 router.route("/me").get(getMyTasks);
+router.route("/key/:taskKey").get(getTaskByKey);
 
 router
   .route("/:projectId")
@@ -55,6 +67,46 @@ router
     validate,
     createTask,
   );
+
+router
+  .route("/:projectId/bulk")
+  .post(
+    validateProjectPermission(TASK_MANAGERS),
+    broadcast,
+    bulkTaskValidator(),
+    validate,
+    bulkUpdateTasks,
+  );
+
+// Saved filters are personal, so nobody else needs to hear about changes
+router
+  .route("/:projectId/filters")
+  .get(validateProjectPermission(AvailableUserRole), getSavedFilters)
+  .post(
+    validateProjectPermission(AvailableUserRole),
+    savedFilterValidator(),
+    validate,
+    saveFilter,
+  );
+
+router
+  .route("/:projectId/filters/:filterId")
+  .delete(validateProjectPermission(AvailableUserRole), deleteSavedFilter);
+
+router
+  .route("/:projectId/t/:taskId/links")
+  .get(validateProjectPermission(AvailableUserRole), getTaskLinks)
+  .post(
+    validateProjectPermission(TASK_MANAGERS),
+    broadcast,
+    taskLinkValidator(),
+    validate,
+    addTaskLink,
+  );
+
+router
+  .route("/:projectId/links/:linkId")
+  .delete(validateProjectPermission(TASK_MANAGERS), broadcast, deleteTaskLink);
 
 router
   .route("/:projectId/labels")

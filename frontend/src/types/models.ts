@@ -34,9 +34,21 @@ export type UserSummary = Pick<
   "_id" | "username" | "fullName" | "avatar"
 >;
 
+/** One column of a project's workflow */
+export interface ProjectStatus {
+  /** Stable id stored on tasks */
+  key: string;
+  name: string;
+  category: StatusCategory;
+  /** Removed from the workflow; kept so history stays readable */
+  archived?: boolean;
+}
+
 export interface Project {
   _id: string;
   name: string;
+  /** Ticket key prefix, e.g. SPST */
+  key: string;
   description?: string;
   createdBy: string;
   createdAt: string;
@@ -74,7 +86,13 @@ export interface ListParams<S extends string = string> {
 export interface ProjectListItem {
   project: Pick<
     Project,
-    "_id" | "name" | "description" | "createdAt" | "updatedAt" | "createdBy"
+    | "_id"
+    | "name"
+    | "key"
+    | "description"
+    | "createdAt"
+    | "updatedAt"
+    | "createdBy"
   > & { members: number };
   role: UserRole;
   isOwner: boolean;
@@ -86,6 +104,10 @@ export interface ProjectsResponse extends Paginated<ProjectListItem> {
 
 /** GET /projects/:projectId — includes the caller's role */
 export interface ProjectDetail extends Project {
+  /** Workflow in board order, including archived statuses */
+  statuses: ProjectStatus[];
+  /** The key can't change once tasks use it */
+  keyLocked: boolean;
   members: number;
   role: UserRole;
   isOwner: boolean;
@@ -125,15 +147,39 @@ export interface LoginResult {
 
 // ---------- Tasks ----------
 
-export const TaskStatuses = {
+/** Every status belongs to a category; "done" checks use the category */
+export const StatusCategories = {
   TODO: "todo",
   IN_PROGRESS: "in_progress",
   DONE: "done",
 } as const;
 
-export type TaskStatus = (typeof TaskStatuses)[keyof typeof TaskStatuses];
+export type StatusCategory =
+  (typeof StatusCategories)[keyof typeof StatusCategories];
 
-export const AvailableTaskStatuses: TaskStatus[] = Object.values(TaskStatuses);
+export const AvailableStatusCategories: StatusCategory[] =
+  Object.values(StatusCategories);
+
+/** A status key from the project's workflow */
+export type TaskStatus = string;
+
+export const TaskTypes = {
+  TASK: "task",
+  STORY: "story",
+  BUG: "bug",
+  EPIC: "epic",
+} as const;
+
+export type TaskType = (typeof TaskTypes)[keyof typeof TaskTypes];
+
+export const AvailableTaskTypes: TaskType[] = Object.values(TaskTypes);
+
+/** `{ _id, key, title }` of a task referenced from another one */
+export interface TaskRef {
+  _id: string;
+  key: string;
+  title: string;
+}
 
 export const TaskPriorities = {
   LOW: "low",
@@ -163,10 +209,15 @@ export interface TaskAttachment {
 /** An item of GET /tasks/:projectId */
 export interface TaskListItem {
   _id: string;
+  /** Ticket key, e.g. SPST-12 */
+  key: string;
+  number: number;
+  type: TaskType;
   title: string;
   description?: string;
   project: string;
   status: TaskStatus;
+  statusCategory: StatusCategory;
   priority: TaskPriority;
   /** ISO date at 12:00 UTC; the calendar day is `dueDate.slice(0, 10)` */
   dueDate?: string;
@@ -175,6 +226,9 @@ export interface TaskListItem {
   storyPoints?: number;
   /** Sprint id; missing = backlog */
   sprint?: string;
+  epic?: TaskRef;
+  /** Unfinished tasks blocking this one */
+  blockedByCount: number;
   assignedTo?: UserSummary;
   assignedBy?: string;
   subtaskCount: number;
@@ -211,15 +265,24 @@ export interface TasksResponse extends Paginated<TaskListItem> {
 /** GET /tasks/:projectId/t/:taskId */
 export interface TaskDetail {
   _id: string;
+  key: string;
+  number: number;
+  type: TaskType;
   title: string;
   description?: string;
   project: string;
   status: TaskStatus;
+  statusCategory: StatusCategory;
   priority: TaskPriority;
   dueDate?: string;
   labels: string[];
   storyPoints?: number;
   sprint?: string;
+  epic?: TaskRef;
+  blockedByCount: number;
+  /** Child issues, for epics */
+  childCount: number;
+  doneChildCount: number;
   assignedTo?: UserSummary;
   assignedBy?: UserSummary;
   attachments: TaskAttachment[];
@@ -276,6 +339,10 @@ export type TaskActivityType =
   | "comment_added"
   | "sprint_changed"
   | "points_changed"
+  | "type_changed"
+  | "epic_changed"
+  | "link_added"
+  | "link_removed"
   | "deleted";
 
 export interface TaskActivity {
@@ -351,6 +418,7 @@ export interface Tally {
 
 export interface ReportTask {
   _id: string;
+  key?: string;
   title: string;
   status: TaskStatus;
   storyPoints: number | null;
@@ -427,8 +495,11 @@ export interface MyTask extends Omit<
   | "subtaskCount"
   | "completedSubtaskCount"
   | "commentCount"
+  | "blockedByCount"
 > {
-  project: { _id: string; name: string };
+  project: Pick<Project, "_id" | "name" | "key"> & {
+    statuses: ProjectStatus[];
+  };
 }
 
 export interface MyTasksResponse extends Paginated<MyTask> {
@@ -442,11 +513,14 @@ export interface SearchResults {
   projects: { _id: string; name: string; description?: string }[];
   tasks: {
     _id: string;
+    key: string;
+    type: TaskType;
     title: string;
     status: TaskStatus;
+    statusCategory: StatusCategory;
     priority: TaskPriority;
     dueDate?: string;
-    project: { _id: string; name: string };
+    project: { _id: string; name: string; statuses: ProjectStatus[] };
   }[];
   notes: {
     _id: string;
@@ -454,4 +528,42 @@ export interface SearchResults {
     updatedAt: string;
     project: { _id: string; name: string };
   }[];
+}
+
+// ---------- Task links ----------
+
+export const TaskLinkTypes = {
+  BLOCKS: "blocks",
+  RELATES_TO: "relates_to",
+  DUPLICATES: "duplicates",
+} as const;
+
+export type TaskLinkType = (typeof TaskLinkTypes)[keyof typeof TaskLinkTypes];
+
+/** A link as seen from one task: outward = "blocks", inward = "is blocked by" */
+export interface TaskLink {
+  _id: string;
+  type: TaskLinkType;
+  direction: "outward" | "inward";
+  task: TaskRef & {
+    type: TaskType;
+    status: TaskStatus;
+    statusCategory: StatusCategory;
+    priority: TaskPriority;
+  };
+  createdAt: string;
+}
+
+// ---------- Saved filters & bulk edits ----------
+
+export interface SavedFilter {
+  _id: string;
+  name: string;
+  filters: Record<string, string>;
+  createdAt: string;
+}
+
+export interface BulkResult {
+  updated: number;
+  failed: { taskId: string; key?: string; message: string }[];
 }

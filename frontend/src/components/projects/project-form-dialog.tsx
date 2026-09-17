@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useNavigate } from "react-router";
 
@@ -33,7 +34,9 @@ interface ProjectFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Pass a project to edit it; omit to create a new one */
-  project?: Pick<Project, "_id" | "name" | "description">;
+  project?: Pick<Project, "_id" | "name" | "description" | "key"> & {
+    keyLocked?: boolean;
+  };
 }
 
 export function ProjectFormDialog({
@@ -51,6 +54,23 @@ export function ProjectFormDialog({
   );
 }
 
+/** "Website redesign" -> "WR", "Website" -> "WEBS" (mirrors the backend) */
+function suggestKey(name: string) {
+  const words = name
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  let key =
+    words.length >= 2
+      ? words.map((word) => word[0]).join("")
+      : (words[0] ?? "").slice(0, 4);
+  key = key.toUpperCase().slice(0, 6);
+  if (!key) return "";
+  if (!/^[A-Z]/.test(key)) key = `P${key}`;
+  return key.length < 2 ? `${key}PRJ`.slice(0, 4) : key;
+}
+
 function ProjectForm({
   project,
   onDone,
@@ -66,8 +86,12 @@ function ProjectForm({
     defaultValues: {
       name: project?.name ?? "",
       description: project?.description ?? "",
+      key: project?.key ?? "",
     },
   });
+  // New projects suggest a key from the name until the key is edited by hand
+  const [keyTouched, setKeyTouched] = useState(isEdit);
+  const keyLocked = !!project?.keyLocked;
 
   const descriptionLength = useWatch({
     control: form.control,
@@ -78,13 +102,19 @@ function ProjectForm({
     const body = {
       name: values.name,
       description: values.description || undefined,
+      key: values.key || undefined,
     };
     const onError = (error: unknown) => {
       if (error instanceof ApiClientError && error.statusCode === 409) {
-        form.setError("name", { type: "server", message: error.message });
+        const field = /key/i.test(error.message) ? "key" : "name";
+        form.setError(field, { type: "server", message: error.message });
         return;
       }
-      applyServerFieldErrors(error, form.setError, ["name", "description"]);
+      applyServerFieldErrors(error, form.setError, [
+        "name",
+        "description",
+        "key",
+      ]);
     };
 
     if (isEdit) {
@@ -135,8 +165,45 @@ function ProjectForm({
                 placeholder="e.g. Website redesign"
                 aria-invalid={fieldState.invalid}
                 autoFocus
+                onChange={(event) => {
+                  field.onChange(event);
+                  if (!keyTouched) {
+                    form.setValue("key", suggestKey(event.target.value));
+                  }
+                }}
               />
               <FieldError errors={[fieldState.error]} />
+            </Field>
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="key"
+          render={({ field, fieldState }) => (
+            <Field data-invalid={fieldState.invalid}>
+              <FieldLabel htmlFor="project-key">Key</FieldLabel>
+              <Input
+                {...field}
+                id="project-key"
+                placeholder="e.g. WEB"
+                maxLength={10}
+                aria-invalid={fieldState.invalid}
+                disabled={keyLocked}
+                className="w-40 font-mono uppercase"
+                onChange={(event) => {
+                  setKeyTouched(true);
+                  field.onChange(event.target.value.toUpperCase());
+                }}
+              />
+              {fieldState.error ? (
+                <FieldError errors={[fieldState.error]} />
+              ) : (
+                <FieldDescription>
+                  {keyLocked
+                    ? "The key can't change once the project has tasks."
+                    : `Tickets are numbered ${field.value || "KEY"}-1, ${field.value || "KEY"}-2…`}
+                </FieldDescription>
+              )}
             </Field>
           )}
         />

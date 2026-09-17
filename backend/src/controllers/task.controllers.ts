@@ -2,18 +2,24 @@ import mongoose, { type PipelineStage, type Types } from "mongoose";
 import { Sprint, SprintStatusEnum } from "../models/sprint.models.js";
 import { MAX_ATTACHMENTS_PER_TASK } from "../middlewares/multer.middleware.js";
 import { NotificationTypeEnum } from "../models/notification.models.js";
-import { Project } from "../models/project.models.js";
+import { Project, type IProjectStatus } from "../models/project.models.js";
 import { ProjectMember } from "../models/projectmember.models.js";
+import { SavedFilter } from "../models/savedfilter.models.js";
 import { Subtask } from "../models/subtask.models.js";
 import {
   REPORT_ACTIVITY_TYPES,
   TaskActivity,
   TaskActivityTypeEnum,
 } from "../models/taskactivity.models.js";
-import { Task } from "../models/task.models.js";
+import { TaskLink } from "../models/tasklink.models.js";
+import { Task, type TaskDocument } from "../models/task.models.js";
 import { TaskComment } from "../models/taskcomment.models.js";
 import { User } from "../models/user.models.js";
-import { logActivity, type ActivityEntry } from "../utils/activity.js";
+import {
+  logActivities,
+  logActivity,
+  type ActivityEntry,
+} from "../utils/activity.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
@@ -23,12 +29,19 @@ import {
   toAttachment,
 } from "../utils/attachments.js";
 import {
+  AvailableStatusCategories,
+  AvailableTaskLinkTypes,
   AvailableTaskPriorities,
-  AvailableTaskStatues,
-  TaskStatusEnum,
+  AvailableTaskTypes,
+  MAX_SAVED_FILTERS,
+  StatusCategoryEnum,
+  TaskLinkTypeEnum,
+  TaskTypeEnum,
   UserRolesEnum,
+  type StatusCategory,
+  type TaskLinkType,
   type TaskPriority,
-  type TaskStatus,
+  type TaskType,
 } from "../utils/constants.js";
 import { notify } from "../utils/notifications.js";
 import { toObjectId } from "../utils/object-id.js";
@@ -49,12 +62,19 @@ import {
   parseStoryPoints,
   startOfTodayUtc,
 } from "../utils/task-fields.js";
+import {
+  TASK_KEY_PATTERN,
+  reserveTaskNumber,
+  resolveStatus,
+} from "../utils/workflow.js";
 
 type ProjectParams = { projectId: string };
 type TaskParams = ProjectParams & { taskId: string };
 type SubtaskParams = ProjectParams & { subTaskId: string };
 type AttachmentParams = TaskParams & { attachmentId: string };
 type CommentParams = ProjectParams & { commentId: string };
+type LinkParams = ProjectParams & { linkId: string };
+type FilterParams = ProjectParams & { filterId: string };
 
 type FacetStages = NonNullable<PipelineStage.Facet["$facet"][string]>;
 
@@ -62,11 +82,14 @@ const USER_SUMMARY = { _id: 1, username: 1, fullName: 1, avatar: 1 } as const;
 const AUTHOR_FIELDS = "_id username fullName avatar";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const isTaskStatus = (value: unknown): value is TaskStatus =>
-  AvailableTaskStatues.includes(value as TaskStatus);
-
 const isTaskPriority = (value: unknown): value is TaskPriority =>
   AvailableTaskPriorities.includes(value as TaskPriority);
+
+const isTaskType = (value: unknown): value is TaskType =>
+  AvailableTaskTypes.includes(value as TaskType);
+
+const isStatusCategory = (value: unknown): value is StatusCategory =>
+  AvailableStatusCategories.includes(value as StatusCategory);
 
 const displayName = (user: { username: string; fullName?: string }) =>
   user.fullName?.trim() || user.username;
@@ -85,6 +108,50 @@ const lookupUser = (field: string): FacetStages =>
     },
     { $addFields: { [field]: { $arrayElemAt: [`$${field}`, 0] } } },
   ] as FacetStages;
+
+/** Replaces `epic` with `{ _id, key, title }` */
+const lookupEpic = [
+  {
+    $lookup: {
+      from: "tasks",
+      localField: "epic",
+      foreignField: "_id",
+      as: "epic",
+      pipeline: [{ $project: { _id: 1, key: 1, title: 1 } }],
+    },
+  },
+  { $addFields: { epic: { $arrayElemAt: ["$epic", 0] } } },
+] as FacetStages;
+
+/** Adds `blockedByCount`: unfinished tasks that block this one */
+const lookupOpenBlockers = [
+  {
+    $lookup: {
+      from: "tasklinks",
+      localField: "_id",
+      foreignField: "target",
+      as: "blockers",
+      pipeline: [
+        { $match: { type: TaskLinkTypeEnum.BLOCKS } },
+        {
+          $lookup: {
+            from: "tasks",
+            localField: "source",
+            foreignField: "_id",
+            as: "source",
+            pipeline: [{ $project: { statusCategory: 1 } }],
+          },
+        },
+        {
+          $match: { "source.statusCategory": { $ne: StatusCategoryEnum.DONE } },
+        },
+        { $project: { _id: 1 } },
+      ],
+    },
+  },
+  { $addFields: { blockedByCount: { $size: "$blockers" } } },
+  { $project: { blockers: 0 } },
+] as FacetStages;
 
 /**
  * Resolves the `assignedTo` body field: empty means unassigned, otherwise the
@@ -114,6 +181,13 @@ const userSnapshot = async (userId: Types.ObjectId | undefined | null) => {
   return user ? { _id: user._id, name: displayName(user) } : null;
 };
 
+/** `{ _id, key, name }` snapshot of a task for activity history */
+const taskSnapshot = async (taskId: Types.ObjectId | undefined | null) => {
+  if (!taskId) return null;
+  const task = await Task.findById(taskId, "key title").lean();
+  return task ? { _id: task._id, key: task.key, name: task.title } : null;
+};
+
 /** Resolves the `sprint` body field: empty / "backlog" = no sprint */
 const resolveSprint = async (
   projectId: Types.ObjectId,
@@ -132,6 +206,33 @@ const resolveSprint = async (
   }
   return sprint._id;
 };
+
+/** Resolves the `epic` body field: empty = no epic */
+const resolveEpic = async (
+  projectId: Types.ObjectId,
+  value: unknown,
+): Promise<Types.ObjectId | undefined> => {
+  if (!value) return undefined;
+  const epic = await Task.findOne(
+    { _id: toObjectId(value, "epic"), project: projectId },
+    "_id type",
+  ).lean();
+  if (!epic || epic.type !== TaskTypeEnum.EPIC) {
+    throw new ApiError(400, "Epic not found in this project");
+  }
+  return epic._id;
+};
+
+/** The workflow and key of a task's project */
+const loadWorkflowProject = async (projectId: Types.ObjectId) => {
+  const project = await Project.findById(projectId, "key statuses").lean();
+  if (!project) {
+    throw new ApiError(404, "Project not found");
+  }
+  return project;
+};
+
+type WorkflowProject = { statuses?: IProjectStatus[] | null };
 
 const findTaskInProject = async (projectId: string, taskId: string) => {
   const task = await Task.findOne({
@@ -186,48 +287,62 @@ const TASK_SORT_FIELDS = [
   "title",
   "dueDate",
   "priority",
+  "key",
 ] as const;
 
 /**
- * GET /tasks/:projectId?status&assignee=me|unassigned|<userId>&priority
- *   &label&due=overdue|week|none&search
- *   &sort=createdAt|updatedAt|title|dueDate|priority&order&page&limit
- * The board loads each status column separately, page by page. `summary`
- * always describes the whole project, ignoring filters.
+ * Builds the task filter shared by the board, list and backlog:
+ * ?status=<key>&category=todo|in_progress|done&type=task|story|bug|epic|work
+ *   &epic=<id>|none&assignee=me|unassigned|<userId>&priority&label
+ *   &due=overdue|week|none&sprint=backlog|active|<id>&search
+ * `type=work` means everything except epics (what boards and sprints show).
  */
-const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
-  const currentUser = requireUser(req);
-  const projectId = toObjectId(req.params.projectId, "project id");
-  const query = parseListQuery(req.query, {
-    sortFields: TASK_SORT_FIELDS,
-    defaultSort: "createdAt",
-    defaultLimit: 20,
-  });
+const buildTaskFilter = async (
+  query: Record<string, unknown>,
+  projectId: Types.ObjectId,
+  currentUser: AuthenticatedUser,
+  search: string,
+) => {
   const today = startOfTodayUtc();
-
   const filter: Record<string, unknown> = { project: projectId };
-  if (isTaskStatus(req.query.status)) {
-    filter.status = req.query.status;
+
+  if (typeof query.status === "string" && query.status) {
+    filter.status = query.status;
   }
-  if (isTaskPriority(req.query.priority)) {
-    filter.priority = req.query.priority;
+  if (isStatusCategory(query.category)) {
+    filter.statusCategory = query.category;
   }
-  if (typeof req.query.label === "string" && req.query.label) {
-    filter.labels = req.query.label.toLowerCase();
+  if (isTaskPriority(query.priority)) {
+    filter.priority = query.priority;
   }
-  if (req.query.due === "overdue") {
+  if (isTaskType(query.type)) {
+    filter.type = query.type;
+  } else if (query.type === "work") {
+    filter.type = { $ne: TaskTypeEnum.EPIC };
+  }
+  if (query.epic === "none") {
+    filter.epic = { $exists: false };
+  } else if (typeof query.epic === "string" && query.epic) {
+    filter.epic = toObjectId(query.epic, "epic");
+  }
+  if (typeof query.label === "string" && query.label) {
+    filter.labels = query.label.toLowerCase();
+  }
+  if (query.due === "overdue") {
     filter.dueDate = { $lt: today };
-    filter.status = filter.status ?? { $ne: TaskStatusEnum.DONE };
-  } else if (req.query.due === "week") {
+    filter.statusCategory = filter.statusCategory ?? {
+      $ne: StatusCategoryEnum.DONE,
+    };
+  } else if (query.due === "week") {
     filter.dueDate = {
       $gte: today,
       $lt: new Date(today.getTime() + 7 * DAY_MS),
     };
-  } else if (req.query.due === "none") {
+  } else if (query.due === "none") {
     filter.dueDate = { $exists: false };
   }
 
-  const sprintParam = req.query.sprint;
+  const sprintParam = query.sprint;
   if (sprintParam === "backlog") {
     filter.sprint = { $exists: false };
   } else if (sprintParam === "active") {
@@ -241,7 +356,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
     filter.sprint = toObjectId(sprintParam, "sprint");
   }
 
-  const assignee = req.query.assignee;
+  const assignee = query.assignee;
   if (assignee === "me") {
     filter.assignedTo = currentUser._id;
   } else if (assignee === "unassigned") {
@@ -249,13 +364,38 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
   } else if (typeof assignee === "string" && assignee) {
     filter.assignedTo = toObjectId(assignee, "assignee");
   }
-  if (query.search) {
+  if (search) {
     filter.$or = [
-      { title: searchRegex(query.search) },
-      { description: searchRegex(query.search) },
-      { labels: searchRegex(query.search) },
+      { key: search.toUpperCase() },
+      { title: searchRegex(search) },
+      { description: searchRegex(search) },
+      { labels: searchRegex(search) },
     ];
   }
+  return filter;
+};
+
+/**
+ * GET /tasks/:projectId?<filters, see buildTaskFilter>
+ *   &sort=createdAt|updatedAt|title|dueDate|priority|key&order&page&limit
+ * The board loads each status column separately, page by page. `summary`
+ * always describes the whole project, ignoring filters.
+ */
+const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const projectId = toObjectId(req.params.projectId, "project id");
+  const query = parseListQuery(req.query, {
+    sortFields: TASK_SORT_FIELDS,
+    defaultSort: "createdAt",
+    defaultLimit: 20,
+  });
+  const today = startOfTodayUtc();
+  const filter = await buildTaskFilter(
+    req.query,
+    projectId,
+    currentUser,
+    query.search,
+  );
 
   // Tasks without a due date always sort last
   const noDueDate =
@@ -266,7 +406,9 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
     title: "titleLower",
     dueDate: "dueSort",
     priority: "priorityRank",
+    key: "number",
   }[query.sortField];
+  const notDone = { $ne: ["$statusCategory", StatusCategoryEnum.DONE] };
 
   const [page, summary] = await Promise.all([
     Task.aggregate([
@@ -286,6 +428,8 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
       { $sort: { [sortKey]: query.sortOrder, _id: 1 } },
       facetPage(query, [
         ...lookupUser("assignedTo"),
+        ...lookupEpic,
+        ...lookupOpenBlockers,
         {
           $lookup: {
             from: "subtasks",
@@ -337,15 +481,31 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
           _id: null,
           total: { $sum: 1 },
           todo: {
-            $sum: { $cond: [{ $eq: ["$status", TaskStatusEnum.TODO] }, 1, 0] },
+            $sum: {
+              $cond: [
+                { $eq: ["$statusCategory", StatusCategoryEnum.TODO] },
+                1,
+                0,
+              ],
+            },
           },
           in_progress: {
             $sum: {
-              $cond: [{ $eq: ["$status", TaskStatusEnum.IN_PROGRESS] }, 1, 0],
+              $cond: [
+                { $eq: ["$statusCategory", StatusCategoryEnum.IN_PROGRESS] },
+                1,
+                0,
+              ],
             },
           },
           done: {
-            $sum: { $cond: [{ $eq: ["$status", TaskStatusEnum.DONE] }, 1, 0] },
+            $sum: {
+              $cond: [
+                { $eq: ["$statusCategory", StatusCategoryEnum.DONE] },
+                1,
+                0,
+              ],
+            },
           },
           overdue: {
             $sum: {
@@ -354,7 +514,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
                   $and: [
                     { $lt: [{ $ifNull: ["$dueDate", noDueDate] }, today] },
                     { $ne: [{ $type: "$dueDate" }, "missing"] },
-                    { $ne: ["$status", TaskStatusEnum.DONE] },
+                    notDone,
                   ],
                 },
                 1,
@@ -366,10 +526,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
             $sum: {
               $cond: [
                 {
-                  $and: [
-                    { $eq: ["$assignedTo", currentUser._id] },
-                    { $ne: ["$status", TaskStatusEnum.DONE] },
-                  ],
+                  $and: [{ $eq: ["$assignedTo", currentUser._id] }, notDone],
                 },
                 1,
                 0,
@@ -418,24 +575,43 @@ const getProjectLabels = asyncHandler<ProjectParams>(async (req, res) => {
 });
 
 const createTask = asyncHandler<ProjectParams>(async (req, res) => {
-  const { title, description, assignedTo, status, priority } = req.body;
+  const { title, description, assignedTo, priority } = req.body;
   const projectId = toObjectId(req.params.projectId, "project id");
   const currentUser = requireUser(req);
   const files = getUploadedFiles(req);
 
   try {
+    const project = await loadWorkflowProject(projectId);
+    const status = resolveStatus(project, req.body.status);
+    const type = isTaskType(req.body.type) ? req.body.type : TaskTypeEnum.TASK;
     const assignee = await resolveAssignee(projectId, assignedTo);
+    const sprint = await resolveSprint(projectId, req.body.sprint);
+    if (type === TaskTypeEnum.EPIC && sprint) {
+      throw new ApiError(400, "Epics can't be added to a sprint");
+    }
+    const epic =
+      type === TaskTypeEnum.EPIC
+        ? undefined
+        : await resolveEpic(projectId, req.body.epic);
+
+    // Reserved last, so validation errors don't use up ticket numbers
+    const { number, key } = await reserveTaskNumber(projectId);
     const task = await Task.create({
+      number,
+      key,
+      type,
       title,
       description,
       project: projectId,
       assignedTo: assignee,
-      status,
+      status: status.key,
+      statusCategory: status.category,
       priority,
       dueDate: parseDueDate(req.body.dueDate) ?? undefined,
       labels: parseLabels(req.body.labels) ?? [],
       storyPoints: parseStoryPoints(req.body.storyPoints) ?? undefined,
-      sprint: await resolveSprint(projectId, req.body.sprint),
+      sprint,
+      epic,
       assignedBy: currentUser._id,
       attachments: files.map((file) => toAttachment(req, file)),
     });
@@ -449,6 +625,14 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
         type: TaskActivityTypeEnum.SPRINT_CHANGED,
         from: null,
         to: await sprintSnapshot(task.sprint),
+        name: "created",
+      });
+    }
+    if (task.epic) {
+      history.push({
+        type: TaskActivityTypeEnum.EPIC_CHANGED,
+        from: null,
+        to: await taskSnapshot(task.epic),
         name: "created",
       });
     }
@@ -476,6 +660,8 @@ const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
     },
     ...lookupUser("assignedTo"),
     ...lookupUser("assignedBy"),
+    ...lookupEpic,
+    ...lookupOpenBlockers,
     {
       $lookup: {
         from: "subtasks",
@@ -485,13 +671,32 @@ const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
         pipeline: [{ $sort: { createdAt: 1 } }, ...lookupUser("createdBy")],
       },
     },
+    // Progress of an epic's child issues
+    {
+      $lookup: {
+        from: "tasks",
+        localField: "_id",
+        foreignField: "epic",
+        as: "children",
+        pipeline: [{ $project: { statusCategory: 1, storyPoints: 1 } }],
+      },
+    },
     {
       $addFields: {
         priority: { $ifNull: ["$priority", "medium"] },
         labels: { $ifNull: ["$labels", []] },
+        childCount: { $size: "$children" },
+        doneChildCount: {
+          $size: {
+            $filter: {
+              input: "$children",
+              cond: { $eq: ["$$this.statusCategory", StatusCategoryEnum.DONE] },
+            },
+          },
+        },
       },
     },
-    { $project: { "attachments.localPath": 0 } },
+    { $project: { "attachments.localPath": 0, children: 0 } },
   ] as PipelineStage[]);
 
   if (!task[0]) {
@@ -502,9 +707,231 @@ const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
     .json(new ApiResponse(200, task[0], "Task fetched successfully"));
 });
 
+/** GET /tasks/key/:taskKey — finds a task by its ticket key, e.g. SPST-12 */
+const getTaskByKey = asyncHandler<{ taskKey: string }>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const key = String(req.params.taskKey).trim().toUpperCase();
+  if (!TASK_KEY_PATTERN.test(key)) {
+    throw new ApiError(404, "Task not found");
+  }
+  const task = await Task.findOne({ key }, "_id key project").lean();
+  const isMember =
+    task &&
+    (await ProjectMember.exists({
+      project: task.project,
+      user: currentUser._id,
+    }));
+  // Non-members get 404 so keys can't be probed
+  if (!task || !isMember) {
+    throw new ApiError(404, "Task not found");
+  }
+  return res.status(200).json(new ApiResponse(200, task, "Task found"));
+});
+
+interface TaskChanges {
+  history: ActivityEntry[];
+  newAssignee?: Types.ObjectId;
+  /** The task stopped being an epic, so its children lose their epic */
+  demotedEpic: boolean;
+}
+
+/**
+ * Applies editable fields from `body` to a task and returns its history.
+ * Shared by single and bulk updates; fields that are absent are untouched.
+ */
+const applyTaskChanges = async (
+  task: TaskDocument,
+  body: Record<string, unknown>,
+  project: WorkflowProject,
+): Promise<TaskChanges> => {
+  const history: ActivityEntry[] = [];
+  const changes: TaskChanges = { history, demotedEpic: false };
+  const { title, description, priority } = body;
+
+  if (typeof title === "string" && title !== task.title) {
+    history.push({
+      type: TaskActivityTypeEnum.TITLE_CHANGED,
+      from: task.title,
+      to: title,
+    });
+    task.title = title;
+  }
+  if (
+    typeof description === "string" &&
+    description !== (task.description ?? "")
+  ) {
+    history.push({ type: TaskActivityTypeEnum.DESCRIPTION_CHANGED });
+    task.description = description;
+  }
+  if (body.status !== undefined && body.status !== task.status) {
+    const status = resolveStatus(project, body.status);
+    history.push({
+      type: TaskActivityTypeEnum.STATUS_CHANGED,
+      from: task.status,
+      to: status.key,
+    });
+    task.status = status.key;
+    task.statusCategory = status.category;
+  }
+  if (priority !== undefined && priority !== task.priority) {
+    if (!isTaskPriority(priority)) {
+      throw new ApiError(422, "Priority is invalid");
+    }
+    history.push({
+      type: TaskActivityTypeEnum.PRIORITY_CHANGED,
+      from: task.priority ?? "medium",
+      to: priority,
+    });
+    task.priority = priority;
+  }
+  if ("assignedTo" in body) {
+    const assignee = await resolveAssignee(task.project, body.assignedTo);
+    if (String(assignee ?? "") !== String(task.assignedTo ?? "")) {
+      history.push({
+        type: TaskActivityTypeEnum.ASSIGNEE_CHANGED,
+        from: await userSnapshot(task.assignedTo),
+        to: await userSnapshot(assignee),
+      });
+      task.assignedTo = assignee;
+      changes.newAssignee = assignee;
+    }
+  }
+
+  if (body.type !== undefined && body.type !== task.type) {
+    if (!isTaskType(body.type)) {
+      throw new ApiError(422, "Issue type is invalid");
+    }
+    history.push({
+      type: TaskActivityTypeEnum.TYPE_CHANGED,
+      from: task.type ?? TaskTypeEnum.TASK,
+      to: body.type,
+    });
+    changes.demotedEpic = task.type === TaskTypeEnum.EPIC;
+    task.type = body.type;
+  }
+
+  if ("sprint" in body) {
+    const sprint = await resolveSprint(task.project, body.sprint);
+    if (String(sprint ?? "") !== String(task.sprint ?? "")) {
+      history.push({
+        type: TaskActivityTypeEnum.SPRINT_CHANGED,
+        from: await sprintSnapshot(task.sprint),
+        to: await sprintSnapshot(sprint),
+      });
+      task.sprint = sprint;
+    }
+  }
+
+  // Epics sit above sprints and can't have an epic themselves
+  const isEpic = task.type === TaskTypeEnum.EPIC;
+  if (isEpic && task.sprint) {
+    throw new ApiError(
+      400,
+      "Epics can't be in a sprint. Move the task to the backlog first.",
+    );
+  }
+  if ("epic" in body || (isEpic && task.epic)) {
+    if (isEpic && body.epic) {
+      throw new ApiError(400, "An epic can't belong to another epic");
+    }
+    const epic = isEpic
+      ? undefined
+      : await resolveEpic(task.project, body.epic);
+    if (epic?.equals(task._id)) {
+      throw new ApiError(400, "A task can't be its own epic");
+    }
+    if (String(epic ?? "") !== String(task.epic ?? "")) {
+      history.push({
+        type: TaskActivityTypeEnum.EPIC_CHANGED,
+        from: await taskSnapshot(task.epic),
+        to: await taskSnapshot(epic),
+      });
+      task.epic = epic;
+    }
+  }
+
+  const dueDate = parseDueDate(body.dueDate);
+  if (
+    dueDate !== undefined &&
+    dueDateKey(dueDate) !== dueDateKey(task.dueDate)
+  ) {
+    history.push({
+      type: TaskActivityTypeEnum.DUE_DATE_CHANGED,
+      from: dueDateKey(task.dueDate),
+      to: dueDateKey(dueDate),
+    });
+    task.dueDate = dueDate ?? undefined;
+  }
+
+  const storyPoints = parseStoryPoints(body.storyPoints);
+  if (storyPoints !== undefined && storyPoints !== (task.storyPoints ?? null)) {
+    history.push({
+      type: TaskActivityTypeEnum.POINTS_CHANGED,
+      from: task.storyPoints ?? null,
+      to: storyPoints,
+    });
+    task.storyPoints = storyPoints ?? undefined;
+  }
+
+  const labels = parseLabels(body.labels);
+  const currentLabels = task.labels ?? [];
+  if (
+    labels !== undefined &&
+    [...labels].sort().join() !== [...currentLabels].sort().join()
+  ) {
+    history.push({
+      type: TaskActivityTypeEnum.LABELS_CHANGED,
+      from: currentLabels,
+      to: labels,
+    });
+    task.labels = labels;
+  }
+
+  return changes;
+};
+
+/** A task that is no longer an epic releases its child issues */
+const releaseEpicChildren = async (
+  epic: {
+    _id: Types.ObjectId;
+    key: string;
+    title: string;
+    project: Types.ObjectId;
+  },
+  actor: Types.ObjectId,
+) => {
+  const children = await Task.find({ epic: epic._id }, "_id").lean();
+  if (children.length === 0) return;
+  await Task.updateMany(
+    { _id: { $in: children.map((child) => child._id) } },
+    { $unset: { epic: 1 } },
+  );
+  await logActivities(
+    epic.project,
+    actor,
+    children.map((child) => ({
+      task: child._id,
+      type: TaskActivityTypeEnum.EPIC_CHANGED,
+      from: { _id: epic._id, key: epic.key, name: epic.title },
+      to: null,
+    })),
+  );
+};
+
+/** Saves applied changes and records their history and notifications */
+const saveTaskChanges = async (
+  task: TaskDocument,
+  changes: TaskChanges,
+  actor: AuthenticatedUser,
+) => {
+  await task.save();
+  await logActivity(task, actor._id, changes.history);
+  await notifyAssignee(actor, task, changes.newAssignee);
+  if (changes.demotedEpic) await releaseEpicChildren(task, actor._id);
+};
+
 const updateTask = asyncHandler<TaskParams>(async (req, res) => {
   const currentUser = requireUser(req);
-  const { title, description, status, priority } = req.body;
   const files = getUploadedFiles(req);
 
   try {
@@ -512,101 +939,8 @@ const updateTask = asyncHandler<TaskParams>(async (req, res) => {
       req.params.projectId,
       req.params.taskId,
     );
-    const history: ActivityEntry[] = [];
-    let newAssignee: Types.ObjectId | undefined;
-
-    if (title !== undefined && title !== task.title) {
-      history.push({
-        type: TaskActivityTypeEnum.TITLE_CHANGED,
-        from: task.title,
-        to: title,
-      });
-      task.title = title;
-    }
-    if (description !== undefined && description !== (task.description ?? "")) {
-      history.push({ type: TaskActivityTypeEnum.DESCRIPTION_CHANGED });
-      task.description = description;
-    }
-    if (status !== undefined && status !== task.status) {
-      history.push({
-        type: TaskActivityTypeEnum.STATUS_CHANGED,
-        from: task.status,
-        to: status,
-      });
-      task.status = status;
-    }
-    if (priority !== undefined && priority !== task.priority) {
-      history.push({
-        type: TaskActivityTypeEnum.PRIORITY_CHANGED,
-        from: task.priority ?? "medium",
-        to: priority,
-      });
-      task.priority = priority;
-    }
-    if ("assignedTo" in req.body) {
-      const assignee = await resolveAssignee(task.project, req.body.assignedTo);
-      if (String(assignee ?? "") !== String(task.assignedTo ?? "")) {
-        history.push({
-          type: TaskActivityTypeEnum.ASSIGNEE_CHANGED,
-          from: await userSnapshot(task.assignedTo),
-          to: await userSnapshot(assignee),
-        });
-        task.assignedTo = assignee;
-        newAssignee = assignee;
-      }
-    }
-
-    if ("sprint" in req.body) {
-      const sprint = await resolveSprint(task.project, req.body.sprint);
-      if (String(sprint ?? "") !== String(task.sprint ?? "")) {
-        history.push({
-          type: TaskActivityTypeEnum.SPRINT_CHANGED,
-          from: await sprintSnapshot(task.sprint),
-          to: await sprintSnapshot(sprint),
-        });
-        task.sprint = sprint;
-      }
-    }
-
-    const dueDate = parseDueDate(req.body.dueDate);
-    if (
-      dueDate !== undefined &&
-      dueDateKey(dueDate) !== dueDateKey(task.dueDate)
-    ) {
-      history.push({
-        type: TaskActivityTypeEnum.DUE_DATE_CHANGED,
-        from: dueDateKey(task.dueDate),
-        to: dueDateKey(dueDate),
-      });
-      task.dueDate = dueDate ?? undefined;
-    }
-
-    const storyPoints = parseStoryPoints(req.body.storyPoints);
-    if (
-      storyPoints !== undefined &&
-      storyPoints !== (task.storyPoints ?? null)
-    ) {
-      history.push({
-        type: TaskActivityTypeEnum.POINTS_CHANGED,
-        from: task.storyPoints ?? null,
-        to: storyPoints,
-      });
-      task.storyPoints = storyPoints ?? undefined;
-    }
-
-    const labels = parseLabels(req.body.labels);
-    const currentLabels = task.labels ?? [];
-    if (
-      labels !== undefined &&
-      [...labels].sort().join() !== [...currentLabels].sort().join()
-    ) {
-      history.push({
-        type: TaskActivityTypeEnum.LABELS_CHANGED,
-        from: currentLabels,
-        to: labels,
-      });
-      task.labels = labels;
-    }
+    const project = await loadWorkflowProject(task.project);
+    const changes = await applyTaskChanges(task, req.body, project);
 
     if (files.length > 0) {
       if (task.attachments.length + files.length > MAX_ATTACHMENTS_PER_TASK) {
@@ -616,16 +950,14 @@ const updateTask = asyncHandler<TaskParams>(async (req, res) => {
         );
       }
       task.attachments.push(...files.map((file) => toAttachment(req, file)));
-      history.push({
+      changes.history.push({
         type: TaskActivityTypeEnum.ATTACHMENT_ADDED,
         name: files.map((file) => file.originalname).join(", "),
         to: files.length,
       });
     }
 
-    await task.save();
-    await logActivity(task, currentUser._id, history);
-    await notifyAssignee(currentUser, task, newAssignee);
+    await saveTaskChanges(task, changes, currentUser);
 
     return res
       .status(200)
@@ -636,18 +968,18 @@ const updateTask = asyncHandler<TaskParams>(async (req, res) => {
   }
 });
 
-const deleteTask = asyncHandler<TaskParams>(async (req, res) => {
-  const currentUser = requireUser(req);
-  const task = await findTaskInProject(req.params.projectId, req.params.taskId);
-
-  // Sprint reports still count the task, so keep its report history and
-  // record what it looked like when it was deleted
-  await logActivity(task, currentUser._id, [
+/**
+ * Deletes a task with its subtasks, comments, links and files. Report history
+ * is kept so sprint reports still count the task.
+ */
+const removeTask = async (task: TaskDocument, actor: Types.ObjectId) => {
+  await logActivity(task, actor, [
     {
       type: TaskActivityTypeEnum.DELETED,
       name: task.title,
       from: {
         title: task.title,
+        key: task.key,
         status: task.status,
         storyPoints: task.storyPoints ?? null,
         sprint: await sprintSnapshot(task.sprint),
@@ -655,16 +987,26 @@ const deleteTask = asyncHandler<TaskParams>(async (req, res) => {
     },
   ]);
 
+  if (task.type === TaskTypeEnum.EPIC) {
+    await releaseEpicChildren(task, actor);
+  }
   await Promise.all([
     task.deleteOne(),
     Subtask.deleteMany({ task: task._id }),
     TaskComment.deleteMany({ task: task._id }),
+    TaskLink.deleteMany({ $or: [{ source: task._id }, { target: task._id }] }),
     TaskActivity.deleteMany({
       task: task._id,
       type: { $nin: REPORT_ACTIVITY_TYPES },
     }),
   ]);
   await removeFiles(task.attachments.map((file) => file.localPath));
+};
+
+const deleteTask = asyncHandler<TaskParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const task = await findTaskInProject(req.params.projectId, req.params.taskId);
+  await removeTask(task, currentUser._id);
 
   return res
     .status(200)
@@ -717,6 +1059,360 @@ const getTaskActivity = asyncHandler<TaskParams>(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, fromFacet(result, query), "Activity fetched"));
+});
+
+// ---------- Links ----------
+
+/** A task in the same project, by id or ticket key */
+const findLinkTarget = async (projectId: Types.ObjectId, value: string) => {
+  const text = value.trim();
+  const byId = /^[a-f\d]{24}$/i.test(text);
+  const task = await Task.findOne(
+    {
+      project: projectId,
+      ...(byId
+        ? { _id: new mongoose.Types.ObjectId(text) }
+        : { key: text.toUpperCase() }),
+    },
+    "_id key title",
+  ).lean();
+  if (!task) {
+    throw new ApiError(404, `No task ${byId ? "" : `${text} `}in this project`);
+  }
+  return task;
+};
+
+/** Links of one task, each with the task on the other end */
+const linksOf = (taskId: Types.ObjectId, match: Record<string, unknown> = {}) =>
+  TaskLink.aggregate([
+    { $match: { $or: [{ source: taskId }, { target: taskId }], ...match } },
+    {
+      $addFields: {
+        direction: {
+          $cond: [{ $eq: ["$source", taskId] }, "outward", "inward"],
+        },
+        other: { $cond: [{ $eq: ["$source", taskId] }, "$target", "$source"] },
+      },
+    },
+    {
+      $lookup: {
+        from: "tasks",
+        localField: "other",
+        foreignField: "_id",
+        as: "task",
+        pipeline: [
+          {
+            $project: {
+              _id: 1,
+              key: 1,
+              title: 1,
+              type: 1,
+              status: 1,
+              statusCategory: 1,
+              priority: { $ifNull: ["$priority", "medium"] },
+            },
+          },
+        ],
+      },
+    },
+    { $unwind: "$task" },
+    { $sort: { type: 1, createdAt: 1 } },
+    { $project: { _id: 1, type: 1, direction: 1, task: 1, createdAt: 1 } },
+  ]);
+
+/** GET /tasks/:projectId/t/:taskId/links */
+const getTaskLinks = asyncHandler<TaskParams>(async (req, res) => {
+  const task = await findTaskInProject(req.params.projectId, req.params.taskId);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, await linksOf(task._id), "Links fetched"));
+});
+
+/**
+ * POST /tasks/:projectId/t/:taskId/links { type, target: id | key, direction? }
+ * `direction: "inward"` reads the other way round ("this task is blocked by
+ * target"), so both sides of a relation can be created from either task.
+ */
+const addTaskLink = asyncHandler<TaskParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const current = await findTaskInProject(
+    req.params.projectId,
+    req.params.taskId,
+  );
+  const inward = req.body.direction === "inward";
+  const type = req.body.type as TaskLinkType;
+  if (!AvailableTaskLinkTypes.includes(type)) {
+    throw new ApiError(422, "Link type is invalid");
+  }
+  const other = await findLinkTarget(current.project, String(req.body.target));
+  if (other._id.equals(current._id)) {
+    throw new ApiError(400, "A task can't be linked to itself");
+  }
+  const currentSnapshot = {
+    _id: current._id,
+    key: current.key,
+    title: current.title,
+  };
+  const [task, target] = inward
+    ? [other, currentSnapshot]
+    : [currentSnapshot, other];
+
+  const alreadyLinked = await TaskLink.exists({
+    type,
+    $or: [
+      { source: task._id, target: target._id },
+      { source: target._id, target: task._id },
+    ],
+  });
+  if (alreadyLinked) {
+    throw new ApiError(409, `This task is already linked to ${other.key}`);
+  }
+
+  const link = await TaskLink.create({
+    project: current.project,
+    source: task._id,
+    target: target._id,
+    type,
+    createdBy: currentUser._id,
+  });
+  await logActivities(current.project, currentUser._id, [
+    {
+      task: task._id,
+      type: TaskActivityTypeEnum.LINK_ADDED,
+      name: type,
+      to: { _id: target._id, key: target.key, name: target.title },
+    },
+    {
+      task: target._id,
+      type: TaskActivityTypeEnum.LINK_ADDED,
+      name: `${type}:inward`,
+      to: { _id: task._id, key: task.key, name: task.title },
+    },
+  ]);
+
+  const [created] = await linksOf(current._id, { _id: link._id });
+  return res.status(201).json(new ApiResponse(201, created, "Link added"));
+});
+
+/** DELETE /tasks/:projectId/links/:linkId */
+const deleteTaskLink = asyncHandler<LinkParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const link = await TaskLink.findOne({
+    _id: toObjectId(req.params.linkId, "link id"),
+    project: toObjectId(req.params.projectId, "project id"),
+  });
+  if (!link) {
+    throw new ApiError(404, "Link not found");
+  }
+  await link.deleteOne();
+
+  const [source, target] = await Promise.all([
+    taskSnapshot(link.source),
+    taskSnapshot(link.target),
+  ]);
+  await logActivities(link.project, currentUser._id, [
+    {
+      task: link.source,
+      type: TaskActivityTypeEnum.LINK_REMOVED,
+      name: link.type,
+      to: target,
+    },
+    {
+      task: link.target,
+      type: TaskActivityTypeEnum.LINK_REMOVED,
+      name: `${link.type}:inward`,
+      to: source,
+    },
+  ]);
+
+  return res.status(200).json(new ApiResponse(200, {}, "Link removed"));
+});
+
+// ---------- Bulk ----------
+
+const BULK_FIELDS = [
+  "status",
+  "priority",
+  "assignedTo",
+  "sprint",
+  "type",
+  "epic",
+  "storyPoints",
+  "dueDate",
+] as const;
+
+/**
+ * POST /tasks/:projectId/bulk
+ * { taskIds, action: "update", changes: { status?, priority?, assignedTo?,
+ *   sprint?, type?, epic?, storyPoints?, dueDate?, addLabels?, removeLabels? } }
+ * { taskIds, action: "delete" }
+ * Each task is updated on its own, so one invalid task doesn't block the rest;
+ * those are returned in `failed`.
+ */
+const bulkUpdateTasks = asyncHandler<ProjectParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const projectId = toObjectId(req.params.projectId, "project id");
+  const ids = [...new Set((req.body.taskIds as string[]).map(String))];
+  const tasks = await Task.find({
+    _id: { $in: ids.map((id) => toObjectId(id, "task id")) },
+    project: projectId,
+  });
+
+  const failed: { taskId: string; key?: string; message: string }[] = ids
+    .filter((id) => !tasks.some((task) => String(task._id) === id))
+    .map((taskId) => ({ taskId, message: "Task not found" }));
+
+  if (req.body.action === "delete") {
+    for (const task of tasks) {
+      await removeTask(task, currentUser._id);
+    }
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { updated: tasks.length, failed },
+          `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"} deleted`,
+        ),
+      );
+  }
+
+  const input = (req.body.changes ?? {}) as Record<string, unknown>;
+  const changes = Object.fromEntries(
+    BULK_FIELDS.filter((field) => field in input).map((field) => [
+      field,
+      input[field],
+    ]),
+  );
+  const addLabels = parseLabels(input.addLabels) ?? [];
+  const removeLabels = parseLabels(input.removeLabels) ?? [];
+  if (
+    Object.keys(changes).length === 0 &&
+    addLabels.length === 0 &&
+    removeLabels.length === 0
+  ) {
+    throw new ApiError(422, "Choose at least one change");
+  }
+
+  const project = await loadWorkflowProject(projectId);
+  let updated = 0;
+  for (const task of tasks) {
+    try {
+      const body: Record<string, unknown> = { ...changes };
+      if (addLabels.length || removeLabels.length) {
+        body.labels = [
+          ...new Set([...(task.labels ?? []), ...addLabels]),
+        ].filter((label) => !removeLabels.includes(label));
+      }
+      const result = await applyTaskChanges(task, body, project);
+      if (result.history.length === 0) continue;
+      await saveTaskChanges(task, result, currentUser);
+      updated += 1;
+    } catch (error) {
+      failed.push({
+        taskId: String(task._id),
+        key: task.key,
+        message:
+          error instanceof ApiError
+            ? error.message
+            : "Couldn't update the task",
+      });
+    }
+  }
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { updated, failed },
+        `${updated} ${updated === 1 ? "task" : "tasks"} updated`,
+      ),
+    );
+});
+
+// ---------- Saved filters ----------
+
+const FILTER_KEYS = [
+  "status",
+  "category",
+  "assignee",
+  "priority",
+  "label",
+  "due",
+  "type",
+  "epic",
+  "sprint",
+  "search",
+  "sort",
+  "order",
+] as const;
+
+const cleanFilters = (value: unknown) => {
+  const input = (value ?? {}) as Record<string, unknown>;
+  return Object.fromEntries(
+    FILTER_KEYS.filter(
+      (key) => typeof input[key] === "string" && input[key],
+    ).map((key) => [key, String(input[key]).slice(0, 100)]),
+  );
+};
+
+/** GET /tasks/:projectId/filters — the current user's saved filters */
+const getSavedFilters = asyncHandler<ProjectParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const filters = await SavedFilter.find(
+    {
+      user: currentUser._id,
+      project: toObjectId(req.params.projectId, "project id"),
+    },
+    "_id name filters createdAt",
+  )
+    .sort({ name: 1 })
+    .lean();
+  return res
+    .status(200)
+    .json(new ApiResponse(200, filters, "Saved filters fetched"));
+});
+
+/** POST /tasks/:projectId/filters { name, filters } — saving a name again replaces it */
+const saveFilter = asyncHandler<ProjectParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const projectId = toObjectId(req.params.projectId, "project id");
+  const name = String(req.body.name).trim();
+  const owner = { user: currentUser._id, project: projectId };
+
+  const exists = await SavedFilter.exists({ ...owner, name });
+  if (
+    !exists &&
+    (await SavedFilter.countDocuments(owner)) >= MAX_SAVED_FILTERS
+  ) {
+    throw new ApiError(
+      400,
+      `You can save up to ${MAX_SAVED_FILTERS} filters per project`,
+    );
+  }
+
+  const filter = await SavedFilter.findOneAndUpdate(
+    { ...owner, name },
+    { $set: { filters: cleanFilters(req.body.filters) } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return res
+    .status(exists ? 200 : 201)
+    .json(new ApiResponse(exists ? 200 : 201, filter, "Filter saved"));
+});
+
+const deleteSavedFilter = asyncHandler<FilterParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const filter = await SavedFilter.findOneAndDelete({
+    _id: toObjectId(req.params.filterId, "filter id"),
+    user: currentUser._id,
+    project: toObjectId(req.params.projectId, "project id"),
+  });
+  if (!filter) {
+    throw new ApiError(404, "Filter not found");
+  }
+  return res.status(200).json(new ApiResponse(200, {}, "Filter deleted"));
 });
 
 // ---------- Subtasks ----------
@@ -986,15 +1682,16 @@ const getMyTasks = asyncHandler(async (req, res) => {
 
   const filter: Record<string, unknown> = { ...base };
   if (req.query.status === "done") {
-    filter.status = TaskStatusEnum.DONE;
+    filter.statusCategory = StatusCategoryEnum.DONE;
   } else if (req.query.status !== "all") {
-    filter.status = { $ne: TaskStatusEnum.DONE };
+    filter.statusCategory = { $ne: StatusCategoryEnum.DONE };
   }
   if (isTaskPriority(req.query.priority)) {
     filter.priority = req.query.priority;
   }
   if (query.search) {
     filter.$or = [
+      { key: query.search.toUpperCase() },
       { title: searchRegex(query.search) },
       { description: searchRegex(query.search) },
     ];
@@ -1007,7 +1704,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
     priority: "priorityRank",
     updatedAt: "updatedAt",
   }[query.sortField];
-  const notDone = { $ne: ["$status", TaskStatusEnum.DONE] };
+  const notDone = { $ne: ["$statusCategory", StatusCategoryEnum.DONE] };
   const hasDue = { $ne: [{ $type: "$dueDate" }, "missing"] };
 
   const [page, summary] = await Promise.all([
@@ -1032,10 +1729,12 @@ const getMyTasks = asyncHandler(async (req, res) => {
             localField: "project",
             foreignField: "_id",
             as: "project",
-            pipeline: [{ $project: { _id: 1, name: 1 } }],
+            // Statuses are per project, so badges need each project's workflow
+            pipeline: [{ $project: { _id: 1, name: 1, key: 1, statuses: 1 } }],
           },
         },
         { $unwind: "$project" },
+        ...lookupEpic,
         {
           $addFields: {
             priority: { $ifNull: ["$priority", "medium"] },
@@ -1106,6 +1805,14 @@ const getMyTasks = asyncHandler(async (req, res) => {
 });
 
 export {
+  addTaskLink,
+  bulkUpdateTasks,
+  deleteSavedFilter,
+  deleteTaskLink,
+  getSavedFilters,
+  getTaskByKey,
+  getTaskLinks,
+  saveFilter,
   getMyTasks,
   addTaskComment,
   createSubTask,

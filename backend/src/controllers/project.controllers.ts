@@ -1,6 +1,6 @@
 import mongoose, { type PipelineStage } from "mongoose";
 import { ProjectNote } from "../models/note.models.js";
-import { Project } from "../models/project.models.js";
+import { Project, type IProjectStatus } from "../models/project.models.js";
 import {
   INVITE_TTL_DAYS,
   InviteStatusEnum,
@@ -13,15 +13,23 @@ import { Task } from "../models/task.models.js";
 import { TaskComment } from "../models/taskcomment.models.js";
 import { TaskActivity } from "../models/taskactivity.models.js";
 import { Notification } from "../models/notification.models.js";
+import { SavedFilter } from "../models/savedfilter.models.js";
 import { Sprint } from "../models/sprint.models.js";
+import { TaskActivityTypeEnum } from "../models/taskactivity.models.js";
+import { TaskLink } from "../models/tasklink.models.js";
 import { User } from "../models/user.models.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
+import { logActivities } from "../utils/activity.js";
 import { removeFiles } from "../utils/attachments.js";
 import {
+  AvailableStatusCategories,
+  MAX_PROJECT_STATUSES,
+  StatusCategoryEnum,
   UserRolesEnum,
   isUserRole,
+  type StatusCategory,
   type UserRole,
 } from "../utils/constants.js";
 import {
@@ -38,6 +46,13 @@ import {
 } from "../utils/pagination.js";
 import { requireUser } from "../utils/request-user.js";
 import { frontendUrl } from "../utils/urls.js";
+import {
+  PROJECT_KEY_PATTERN,
+  newStatusKey,
+  projectStatuses,
+  suggestProjectKey,
+  uniqueProjectKey,
+} from "../utils/workflow.js";
 
 type ProjectParams = { projectId: string };
 type MemberParams = ProjectParams & { userId: string };
@@ -126,6 +141,7 @@ const getProjects = asyncHandler(async (req, res) => {
             project: {
               _id: 1,
               name: 1,
+              key: 1,
               description: 1,
               members: 1,
               createdAt: 1,
@@ -174,13 +190,19 @@ const getProjects = asyncHandler(async (req, res) => {
 const getProjectById = asyncHandler<ProjectParams>(async (req, res) => {
   const currentUser = requireUser(req);
   const project = await findProjectOr404(req.params.projectId);
-  const members = await ProjectMember.countDocuments({ project: project._id });
+  const [members, hasTasks] = await Promise.all([
+    ProjectMember.countDocuments({ project: project._id }),
+    Task.exists({ project: project._id }),
+  ]);
 
   return res.status(200).json(
     new ApiResponse(
       200,
       {
         ...project.toJSON(),
+        statuses: projectStatuses(project),
+        // The ticket key can only change while no ticket uses it
+        keyLocked: !!hasTasks,
         members,
         role: currentUser.role,
         isOwner: project.createdBy.equals(currentUser._id),
@@ -190,13 +212,43 @@ const getProjectById = asyncHandler<ProjectParams>(async (req, res) => {
   );
 });
 
+/** Normalizes a requested ticket key; empty = generate one from the name */
+const requestedKey = (value: unknown) =>
+  typeof value === "string" && value.trim()
+    ? value.trim().toUpperCase()
+    : undefined;
+
+const assertKeyAvailable = async (key: string, projectId?: unknown) => {
+  if (!PROJECT_KEY_PATTERN.test(key)) {
+    throw new ApiError(
+      422,
+      "Key must be 2-10 letters or digits and start with a letter",
+    );
+  }
+  const taken = await Project.exists({
+    key,
+    ...(projectId ? { _id: { $ne: projectId } } : {}),
+  });
+  if (taken) {
+    throw new ApiError(
+      409,
+      `The key ${key} is already used by another project`,
+    );
+  }
+};
+
 const createProject = asyncHandler(async (req, res) => {
   const { name, description } = req.body;
   const currentUser = requireUser(req);
 
+  let key = requestedKey(req.body.key);
+  if (key) await assertKeyAvailable(key);
+  else key = await uniqueProjectKey(suggestProjectKey(String(name)));
+
   const project = await Project.create({
     name,
     description,
+    key,
     createdBy: currentUser._id,
   });
 
@@ -213,16 +265,23 @@ const createProject = asyncHandler(async (req, res) => {
 
 const updateProject = asyncHandler<ProjectParams>(async (req, res) => {
   const { name, description } = req.body;
+  const project = await findProjectOr404(req.params.projectId);
 
-  const project = await Project.findByIdAndUpdate(
-    toObjectId(req.params.projectId, "project id"),
-    { name, description },
-    { new: true },
-  );
-
-  if (!project) {
-    throw new ApiError(404, "Project not found");
+  const key = requestedKey(req.body.key);
+  if (key && key !== project.key) {
+    if (await Task.exists({ project: project._id })) {
+      throw new ApiError(
+        409,
+        "The key can't change once the project has tasks, because existing ticket keys would break",
+      );
+    }
+    await assertKeyAvailable(key, project._id);
+    project.key = key;
   }
+  project.name = name;
+  project.description = description;
+  await project.save();
+
   return res
     .status(200)
     .json(new ApiResponse(200, project, "Project updated successfully"));
@@ -246,6 +305,8 @@ const deleteProject = asyncHandler<ProjectParams>(async (req, res) => {
     TaskActivity.deleteMany({ project: projectOid }),
     Notification.deleteMany({ project: projectOid }),
     Sprint.deleteMany({ project: projectOid }),
+    TaskLink.deleteMany({ project: projectOid }),
+    SavedFilter.deleteMany({ project: projectOid }),
     Subtask.deleteMany({ task: { $in: tasks.map((task) => task._id) } }),
     Task.deleteMany({ project: projectOid }),
   ]);
@@ -662,7 +723,154 @@ const revokeInvite = asyncHandler<InviteParams>(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, {}, "Invitation revoked"));
 });
 
+// ---------- Workflow ----------
+
+interface StatusInput {
+  key?: unknown;
+  name?: unknown;
+  category?: unknown;
+}
+
+/**
+ * PUT /projects/:projectId/statuses
+ * { statuses: [{ key?, name, category }], moves?: { removedKey: targetKey } }
+ * Replaces the workflow (array order = board order). Statuses without a key
+ * are new. Tasks in a removed status must be moved with `moves`; removed
+ * statuses are archived so their names stay readable in history.
+ */
+const updateProjectStatuses = asyncHandler<ProjectParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const project = await findProjectOr404(req.params.projectId);
+  const input: StatusInput[] = Array.isArray(req.body.statuses)
+    ? req.body.statuses
+    : [];
+  const moves: Record<string, unknown> =
+    req.body.moves && typeof req.body.moves === "object" ? req.body.moves : {};
+
+  if (input.length === 0 || input.length > MAX_PROJECT_STATUSES) {
+    throw new ApiError(
+      422,
+      `A workflow needs between 1 and ${MAX_PROJECT_STATUSES} statuses`,
+    );
+  }
+
+  const current = projectStatuses(project);
+  const currentByKey = new Map(current.map((status) => [status.key, status]));
+  const takenKeys = new Set(current.map((status) => status.key));
+  const seenNames = new Set<string>();
+
+  const next: IProjectStatus[] = input.map((item) => {
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    if (!name || name.length > 30) {
+      throw new ApiError(422, "Status names must be 1–30 characters");
+    }
+    if (seenNames.has(name.toLowerCase())) {
+      throw new ApiError(422, `There are two statuses named "${name}"`);
+    }
+    seenNames.add(name.toLowerCase());
+    if (!AvailableStatusCategories.includes(item.category as StatusCategory)) {
+      throw new ApiError(422, `Choose a category for "${name}"`);
+    }
+    const existing =
+      typeof item.key === "string" ? currentByKey.get(item.key) : undefined;
+    if (typeof item.key === "string" && !existing) {
+      throw new ApiError(422, `Unknown status "${name}"`);
+    }
+    return {
+      key: existing ? existing.key : newStatusKey(name, takenKeys),
+      name,
+      category: item.category as StatusCategory,
+    };
+  });
+
+  const requiredCategories = [
+    { category: StatusCategoryEnum.TODO, label: "To do" },
+    { category: StatusCategoryEnum.DONE, label: "Done" },
+  ];
+  for (const { category, label } of requiredCategories) {
+    if (!next.some((status) => status.category === category)) {
+      throw new ApiError(
+        422,
+        `The workflow needs at least one status in the ${label} category`,
+      );
+    }
+  }
+  if (new Set(next.map((status) => status.key)).size !== next.length) {
+    throw new ApiError(422, "A status appears twice");
+  }
+
+  const nextKeys = new Set(next.map((status) => status.key));
+  const removed = current.filter(
+    (status) => !status.archived && !nextKeys.has(status.key),
+  );
+
+  // Every task in a removed status needs somewhere to go
+  const moveTargets = new Map<string, IProjectStatus>();
+  for (const status of removed) {
+    const count = await Task.countDocuments({
+      project: project._id,
+      status: status.key,
+    });
+    if (count === 0) continue;
+    const target = next.find(
+      (candidate) => candidate.key === moves[status.key],
+    );
+    if (!target) {
+      throw new ApiError(
+        409,
+        `${count} ${count === 1 ? "task is" : "tasks are"} in "${status.name}". Choose where to move ${count === 1 ? "it" : "them"}.`,
+      );
+    }
+    moveTargets.set(status.key, target);
+  }
+
+  // Archived statuses stay at the end so old history keeps its names
+  const archived = current
+    .filter((status) => !nextKeys.has(status.key))
+    .map((status) => ({ ...status, archived: true }));
+  project.statuses = [...next, ...archived];
+  await project.save();
+
+  for (const [fromKey, target] of moveTargets) {
+    const tasks = await Task.find(
+      { project: project._id, status: fromKey },
+      "_id",
+    ).lean();
+    await Task.updateMany(
+      { _id: { $in: tasks.map((task) => task._id) } },
+      { $set: { status: target.key, statusCategory: target.category } },
+    );
+    await logActivities(
+      project._id,
+      currentUser._id,
+      tasks.map((task) => ({
+        task: task._id,
+        type: TaskActivityTypeEnum.STATUS_CHANGED,
+        from: fromKey,
+        to: target.key,
+        name: "status_removed",
+      })),
+    );
+  }
+
+  // Keep the copied category in sync when a status changes category
+  for (const status of next) {
+    const before = currentByKey.get(status.key);
+    if (before && before.category !== status.category) {
+      await Task.updateMany(
+        { project: project._id, status: status.key },
+        { $set: { statusCategory: status.category } },
+      );
+    }
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, projectStatuses(project), "Workflow updated"));
+});
+
 export {
+  updateProjectStatuses,
   addMembersToProject,
   createProject,
   deleteMember,

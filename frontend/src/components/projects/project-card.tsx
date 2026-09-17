@@ -58,15 +58,22 @@ export function ProjectCard({ item, onEdit, onDelete }: ProjectCardProps) {
           >
             {project.name.charAt(0).toUpperCase()}
           </span>
-          <CardTitle className="min-w-0 truncate">
-            {/* Stretched link makes the whole card clickable */}
-            <Link
-              to={to}
-              className="after:absolute after:inset-0 after:rounded-[inherit] focus-visible:outline-none"
-            >
-              {project.name}
-            </Link>
-          </CardTitle>
+          <div className="min-w-0">
+            <CardTitle className="truncate">
+              {/* Stretched link makes the whole card clickable */}
+              <Link
+                to={to}
+                className="after:absolute after:inset-0 after:rounded-[inherit] focus-visible:outline-none"
+              >
+                {project.name}
+              </Link>
+            </CardTitle>
+            {project.key && (
+              <p className="font-mono text-xs text-muted-foreground">
+                {project.key}
+              </p>
+            )}
+          </div>
         </div>
         <CardAction className="relative z-10">
           <DropdownMenu>

@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 
 import { PriorityIcon } from "@/components/tasks/task-fields";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
+import { TaskKey, TaskTypeIcon } from "@/components/tasks/task-type";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -167,14 +168,22 @@ export function GlobalSearch() {
                             )
                           }
                         >
-                          <PriorityIcon priority={task.priority} />
+                          <TaskTypeIcon type={task.type} />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate">{task.title}</span>
-                            <span className="block truncate text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                              <TaskKey value={task.key} />
+                              <PriorityIcon
+                                priority={task.priority}
+                                className="size-3"
+                              />
                               {task.project.name}
                             </span>
                           </span>
-                          <TaskStatusBadge status={task.status} />
+                          <TaskStatusBadge
+                            status={task.status}
+                            statuses={task.project.statuses}
+                          />
                         </CommandItem>
                       ))}
                     </CommandGroup>

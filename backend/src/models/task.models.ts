@@ -1,11 +1,16 @@
 import mongoose, { Schema, type HydratedDocument, type Types } from "mongoose";
 import {
+  AvailableStatusCategories,
   AvailableTaskPriorities,
-  AvailableTaskStatues,
+  AvailableTaskTypes,
+  StatusCategoryEnum,
   TaskPriorityEnum,
   TaskStatusEnum,
+  TaskTypeEnum,
+  type StatusCategory,
   type TaskPriority,
   type TaskStatus,
+  type TaskType,
 } from "../utils/constants.js";
 
 export interface ITaskAttachment {
@@ -20,12 +25,20 @@ export interface ITaskAttachment {
 }
 
 export interface ITask {
+  /** Ticket number within the project (SPST-12 -> 12) */
+  number: number;
+  /** Ticket key, e.g. SPST-12. Project keys are locked once tasks exist. */
+  key: string;
+  type: TaskType;
   title: string;
   description?: string;
   project: Types.ObjectId;
   assignedTo?: Types.ObjectId;
   assignedBy?: Types.ObjectId;
+  /** Key of a status in the project's workflow */
   status: TaskStatus;
+  /** Copy of the status' category, kept in sync, for queries and reports */
+  statusCategory: StatusCategory;
   priority: TaskPriority;
   /** Stored at 12:00 UTC so the calendar day is the same in every timezone */
   dueDate?: Date;
@@ -34,6 +47,8 @@ export interface ITask {
   storyPoints?: number;
   /** Missing = backlog */
   sprint?: Types.ObjectId;
+  /** Parent epic (a task of type "epic" in the same project) */
+  epic?: Types.ObjectId;
   attachments: ITaskAttachment[];
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +58,13 @@ export type TaskDocument = HydratedDocument<ITask>;
 
 const taskSchema = new Schema<ITask>(
   {
+    number: { type: Number, required: true },
+    key: { type: String, required: true },
+    type: {
+      type: String,
+      enum: AvailableTaskTypes,
+      default: TaskTypeEnum.TASK,
+    },
     title: {
       type: String,
       required: true,
@@ -65,8 +87,12 @@ const taskSchema = new Schema<ITask>(
     },
     status: {
       type: String,
-      enum: AvailableTaskStatues,
       default: TaskStatusEnum.TODO,
+    },
+    statusCategory: {
+      type: String,
+      enum: AvailableStatusCategories,
+      default: StatusCategoryEnum.TODO,
     },
     priority: {
       type: String,
@@ -83,6 +109,11 @@ const taskSchema = new Schema<ITask>(
     sprint: {
       type: Schema.Types.ObjectId,
       ref: "Sprint",
+      index: true,
+    },
+    epic: {
+      type: Schema.Types.ObjectId,
+      ref: "Task",
       index: true,
     },
     attachments: {
@@ -109,5 +140,8 @@ const taskSchema = new Schema<ITask>(
     },
   },
 );
+
+taskSchema.index({ key: 1 }, { unique: true });
+taskSchema.index({ project: 1, number: 1 }, { unique: true });
 
 export const Task = mongoose.model<ITask>("Task", taskSchema);

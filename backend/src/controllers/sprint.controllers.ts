@@ -5,7 +5,7 @@ import { logActivities } from "../utils/activity.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
-import { TaskStatusEnum } from "../utils/constants.js";
+import { StatusCategoryEnum } from "../utils/constants.js";
 import { toObjectId } from "../utils/object-id.js";
 import { requireUser } from "../utils/request-user.js";
 import { buildSprintReport, toSprintStats } from "../utils/sprint-report.js";
@@ -46,7 +46,7 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
           localField: "_id",
           foreignField: "sprint",
           as: "tasks",
-          pipeline: [{ $project: { status: 1, storyPoints: 1 } }],
+          pipeline: [{ $project: { statusCategory: 1, storyPoints: 1 } }],
         },
       },
       {
@@ -54,7 +54,7 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
           doneTasks: {
             $filter: {
               input: "$tasks",
-              cond: { $eq: ["$$this.status", TaskStatusEnum.DONE] },
+              cond: { $eq: ["$$this.statusCategory", StatusCategoryEnum.DONE] },
             },
           },
         },
@@ -91,21 +91,32 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
       },
     ]),
     Task.aggregate([
-      { $match: { project: projectId, sprint: { $exists: false } } },
+      // Epics sit above sprints, so they don't count as backlog work
+      {
+        $match: {
+          project: projectId,
+          sprint: { $exists: false },
+          type: { $ne: "epic" },
+        },
+      },
       {
         $group: {
           _id: null,
           taskCount: { $sum: 1 },
           doneCount: {
             $sum: {
-              $cond: [{ $eq: ["$status", TaskStatusEnum.DONE] }, 1, 0],
+              $cond: [
+                { $eq: ["$statusCategory", StatusCategoryEnum.DONE] },
+                1,
+                0,
+              ],
             },
           },
           pointCount: { $sum: { $ifNull: ["$storyPoints", 0] } },
           donePoints: {
             $sum: {
               $cond: [
-                { $eq: ["$status", TaskStatusEnum.DONE] },
+                { $eq: ["$statusCategory", StatusCategoryEnum.DONE] },
                 { $ifNull: ["$storyPoints", 0] },
                 0,
               ],
@@ -299,9 +310,12 @@ const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
   const completedAt = new Date();
   const report = await buildSprintReport(sprint, { asOf: completedAt });
   const [doneCount, openTasks] = await Promise.all([
-    Task.countDocuments({ sprint: sprint._id, status: TaskStatusEnum.DONE }),
+    Task.countDocuments({
+      sprint: sprint._id,
+      statusCategory: StatusCategoryEnum.DONE,
+    }),
     Task.find(
-      { sprint: sprint._id, status: { $ne: TaskStatusEnum.DONE } },
+      { sprint: sprint._id, statusCategory: { $ne: StatusCategoryEnum.DONE } },
       "_id",
     ).lean(),
   ]);

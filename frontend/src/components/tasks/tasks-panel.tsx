@@ -7,6 +7,7 @@ import {
   ListTodoIcon,
   PlusIcon,
   SearchIcon,
+  UserRoundCheckIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
@@ -15,18 +16,17 @@ import { toast } from "sonner";
 import { BacklogView } from "@/components/sprints/backlog-view";
 import { SprintFilterSelect } from "@/components/sprints/sprint-select";
 import { TaskBoard } from "@/components/tasks/task-board";
-import { TaskListView } from "@/components/tasks/task-list-view";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useSprints } from "@/features/sprints/hooks";
+import { TaskDetailDialog } from "@/components/tasks/task-detail-dialog";
 import {
+  SavedFiltersMenu,
   TaskFilters as TaskFieldFiltersPopover,
   type TaskFieldFilters,
 } from "@/components/tasks/task-filters";
-import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import {
   TaskFormDialog,
   type EditableTask,
 } from "@/components/tasks/task-form-dialog";
+import { TaskListView } from "@/components/tasks/task-list-view";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -59,6 +59,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useProjectWorkflow } from "@/features/projects/hooks";
+import { useSprints } from "@/features/sprints/hooks";
 import type { TaskSort } from "@/features/tasks/api";
 import {
   useDeleteTask,
@@ -68,18 +71,19 @@ import {
 } from "@/features/tasks/hooks";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { can } from "@/lib/permissions";
-import { taskStatusMeta } from "@/lib/task-status";
-import {
-  TaskStatuses,
-  type SortOrder,
-  type TaskStatus,
-  type UserRole,
+import { cn } from "@/lib/utils";
+import type {
+  SavedFilter,
+  SortOrder,
+  TaskStatus,
+  UserRole,
 } from "@/types/models";
-
-type AssigneeFilter = "all" | "me" | "unassigned";
 
 const VIEWS = ["board", "list", "backlog"] as const;
 type TaskView = (typeof VIEWS)[number];
+
+const DEFAULT_SORT: TaskSort = "createdAt";
+const DEFAULT_ORDER: SortOrder = "desc";
 
 const sortLabels: Record<TaskSort, string> = {
   createdAt: "Date created",
@@ -87,7 +91,17 @@ const sortLabels: Record<TaskSort, string> = {
   dueDate: "Due date",
   priority: "Priority",
   title: "Title",
+  key: "Key",
 };
+
+const FIELD_FILTER_KEYS = [
+  "assignee",
+  "type",
+  "epic",
+  "priority",
+  "label",
+  "due",
+] as const satisfies readonly (keyof TaskFieldFilters)[];
 
 interface TasksPanelProps {
   projectId: string;
@@ -96,6 +110,7 @@ interface TasksPanelProps {
 
 export function TasksPanel({ projectId, role }: TasksPanelProps) {
   const summary = useTaskSummary(projectId);
+  const workflow = useProjectWorkflow(projectId);
   const updateTask = useUpdateTask(projectId);
   const deleteTask = useDeleteTask(projectId);
   const canManage = can(role, "task:manage");
@@ -134,9 +149,8 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
         : sprintFilter;
 
   const [search, setSearch] = useState("");
-  const [assignee, setAssignee] = useState<AssigneeFilter>("all");
-  const [sort, setSort] = useState<TaskSort>("createdAt");
-  const [order, setOrder] = useState<SortOrder>("desc");
+  const [sort, setSort] = useState<TaskSort>(DEFAULT_SORT);
+  const [order, setOrder] = useState<SortOrder>(DEFAULT_ORDER);
   const [fieldFilters, setFieldFilters] = useState<TaskFieldFilters>({});
   const debouncedSearch = useDebouncedValue(search.trim());
 
@@ -144,15 +158,49 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
     sort,
     order,
     search: debouncedSearch || undefined,
-    assignee: assignee === "all" ? undefined : assignee,
     sprint: sprintFilter === "all" ? undefined : sprintFilter,
     ...fieldFilters,
+    // Boards track work items; epics are listed in the list view
+    type: fieldFilters.type ?? (view === "list" ? undefined : "work"),
   };
+
+  /** The filters that differ from the defaults, for saving */
+  const currentFilters: Record<string, string> = Object.fromEntries(
+    Object.entries({
+      search: search.trim() || undefined,
+      sprint: sprintChoice ?? undefined,
+      sort: sort === DEFAULT_SORT ? undefined : sort,
+      order: order === DEFAULT_ORDER ? undefined : order,
+      ...fieldFilters,
+    }).filter((entry): entry is [string, string] => !!entry[1]),
+  );
+
+  const applySavedFilter = ({ filters: saved }: SavedFilter) => {
+    setSearch(saved.search ?? "");
+    setSprintChoice(saved.sprint ?? null);
+    setSort((saved.sort as TaskSort) ?? DEFAULT_SORT);
+    setOrder((saved.order as SortOrder) ?? DEFAULT_ORDER);
+    setFieldFilters(
+      Object.fromEntries(
+        FIELD_FILTER_KEYS.filter((key) => saved[key]).map((key) => [
+          key,
+          saved[key],
+        ]),
+      ) as TaskFieldFilters,
+    );
+  };
+
+  const onlyMine = fieldFilters.assignee === "me";
+  const firstTodoStatus =
+    workflow.statuses.find((status) => status.category === "todo")?.key ??
+    workflow.statuses[0]?.key ??
+    "todo";
 
   const [createStatus, setCreateStatus] = useState<TaskStatus | null>(null);
   const [editing, setEditing] = useState<EditableTask | null>(null);
   const [deleting, setDeleting] = useState<{
     _id: string;
+    key?: string;
     title: string;
   } | null>(null);
 
@@ -195,29 +243,31 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
               <SearchIcon />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Search tasks…"
+              placeholder="Search title or key…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               aria-label="Search tasks"
             />
           </InputGroup>
           <div className="flex flex-wrap gap-2">
-            <Select
-              value={assignee}
-              onValueChange={(v) => setAssignee(v as AssigneeFilter)}
+            <Button
+              variant="outline"
+              aria-pressed={onlyMine}
+              className={cn(
+                "flex-1 sm:flex-none",
+                onlyMine &&
+                  "border-primary/40 bg-primary/10 text-foreground hover:bg-primary/15",
+              )}
+              onClick={() =>
+                setFieldFilters({
+                  ...fieldFilters,
+                  assignee: onlyMine ? undefined : "me",
+                })
+              }
             >
-              <SelectTrigger
-                className="flex-1 sm:w-44"
-                aria-label="Filter by assignee"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Everyone&apos;s tasks</SelectItem>
-                <SelectItem value="me">Assigned to me</SelectItem>
-                <SelectItem value="unassigned">Unassigned</SelectItem>
-              </SelectContent>
-            </Select>
+              <UserRoundCheckIcon />
+              Only my issues
+            </Button>
             <SprintFilterSelect
               projectId={projectId}
               value={sprintFilter}
@@ -227,6 +277,11 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
               projectId={projectId}
               value={fieldFilters}
               onChange={setFieldFilters}
+            />
+            <SavedFiltersMenu
+              projectId={projectId}
+              current={currentFilters}
+              onApply={applySavedFilter}
             />
             <Select value={sort} onValueChange={(v) => setSort(v as TaskSort)}>
               <SelectTrigger className="flex-1 sm:w-40" aria-label="Sort by">
@@ -254,7 +309,7 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
           {canManage && (
             <Button
               className="lg:ml-auto"
-              onClick={() => setCreateStatus(TaskStatuses.TODO)}
+              onClick={() => setCreateStatus(firstTodoStatus)}
             >
               <PlusIcon />
               New task
@@ -268,7 +323,7 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
           projectId={projectId}
           canManage={canManage}
           onOpenTask={setOpenTask}
-          onCreateTask={() => setCreateStatus(TaskStatuses.TODO)}
+          onCreateTask={() => setCreateStatus(firstTodoStatus)}
         />
       ) : hasNoTasks ? (
         <Empty className="border py-16">
@@ -285,7 +340,7 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
           </EmptyHeader>
           {canManage && (
             <EmptyContent>
-              <Button onClick={() => setCreateStatus(TaskStatuses.TODO)}>
+              <Button onClick={() => setCreateStatus(firstTodoStatus)}>
                 <PlusIcon />
                 Create first task
               </Button>
@@ -298,6 +353,7 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
           key={JSON.stringify(filters)}
           projectId={projectId}
           filters={filters}
+          canManage={canManage}
           onOpenTask={setOpenTask}
         />
       ) : (
@@ -314,7 +370,7 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
               { taskId: task._id, status },
               {
                 onSuccess: () =>
-                  toast.success(`Moved to ${taskStatusMeta[status].label}`, {
+                  toast.success(`Moved to ${workflow.describe(status).name}`, {
                     description: task.title,
                   }),
               },
@@ -323,11 +379,12 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
         />
       )}
 
-      <TaskDetailSheet
+      <TaskDetailDialog
         projectId={projectId}
         taskId={openTaskId}
         role={role}
         onClose={() => setOpenTask(null)}
+        onOpenTask={setOpenTask}
         onEdit={(task) =>
           setEditing({ ...task, attachmentCount: task.attachments.length })
         }
@@ -359,10 +416,12 @@ export function TasksPanel({ projectId, role }: TasksPanelProps) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete task?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Delete {deleting?.key ?? "task"}?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              “{deleting?.title}” and all of its subtasks and attachments will
-              be permanently deleted.
+              “{deleting?.title}” and all of its subtasks, links and attachments
+              will be permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,9 +1,11 @@
 import { body, query, type ValidationChain } from "express-validator";
 import { isValidTimeZone } from "../utils/sprint-report.js";
 import {
+  AvailableTaskLinkTypes,
   AvailableTaskPriorities,
-  AvailableTaskStatues,
+  AvailableTaskTypes,
   AvailableUserRole,
+  MAX_BULK_TASKS,
 } from "../utils/constants.js";
 import {
   parseDueDate,
@@ -119,6 +121,16 @@ const createProjectValidator = (): ValidationChain[] => {
   return [
     body("name").notEmpty().withMessage("Name is required"),
     body("description").optional(),
+    // Empty: generated from the name on create, unchanged on update
+    body("key")
+      .optional({ values: "falsy" })
+      .isString()
+      .trim()
+      .toUpperCase()
+      .matches(/^[A-Z][A-Z0-9]{1,9}$/)
+      .withMessage(
+        "Key must be 2-10 letters or digits and start with a letter",
+      ),
   ];
 };
 
@@ -162,10 +174,21 @@ const taskFieldValidators = (isCreate: boolean): ValidationChain[] => {
       .trim()
       .isLength({ max: 5000 })
       .withMessage("Description must be at most 5000 characters"),
+    // Checked against the project's workflow in the controller
     body("status")
       .optional()
-      .isIn(AvailableTaskStatues)
+      .isString()
+      .isLength({ min: 1, max: 40 })
       .withMessage("Status is invalid"),
+    body("type")
+      .optional()
+      .isIn(AvailableTaskTypes)
+      .withMessage("Issue type is invalid"),
+    // "" removes the task from its epic
+    body("epic")
+      .optional({ values: "falsy" })
+      .isMongoId()
+      .withMessage("Epic is invalid"),
     // An empty value unassigns the task
     body("assignedTo")
       .optional({ values: "falsy" })
@@ -204,6 +227,48 @@ const taskFieldValidators = (isCreate: boolean): ValidationChain[] => {
 };
 
 const createTaskValidator = (): ValidationChain[] => taskFieldValidators(true);
+
+const taskLinkValidator = (): ValidationChain[] => {
+  return [
+    body("type")
+      .isIn(AvailableTaskLinkTypes)
+      .withMessage("Link type is invalid"),
+    // A task id or a ticket key like SPST-12
+    body("target")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage("Choose the task to link"),
+    body("direction")
+      .optional()
+      .isIn(["outward", "inward"])
+      .withMessage("Direction must be outward or inward"),
+  ];
+};
+
+const bulkTaskValidator = (): ValidationChain[] => {
+  return [
+    body("taskIds")
+      .isArray({ min: 1, max: MAX_BULK_TASKS })
+      .withMessage(`Select between 1 and ${MAX_BULK_TASKS} tasks`),
+    body("taskIds.*").isMongoId().withMessage("Task id is invalid"),
+    body("action")
+      .isIn(["update", "delete"])
+      .withMessage("Action must be update or delete"),
+    body("changes").optional().isObject().withMessage("Changes are invalid"),
+  ];
+};
+
+const savedFilterValidator = (): ValidationChain[] => {
+  return [
+    body("name")
+      .isString()
+      .trim()
+      .isLength({ min: 1, max: 40 })
+      .withMessage("Filter names must be 1-40 characters"),
+    body("filters").isObject().withMessage("Filters are invalid"),
+  ];
+};
 
 const updateTaskValidator = (): ValidationChain[] => taskFieldValidators(false);
 
@@ -303,6 +368,9 @@ const reportQueryValidator = (): ValidationChain[] => {
 };
 
 export {
+  bulkTaskValidator,
+  savedFilterValidator,
+  taskLinkValidator,
   reportQueryValidator,
   sprintValidator,
   commentValidator,

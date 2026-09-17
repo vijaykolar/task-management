@@ -17,7 +17,7 @@ const lookupProjectName = [
       localField: "project",
       foreignField: "_id",
       as: "project",
-      pipeline: [{ $project: { _id: 1, name: 1 } }],
+      pipeline: [{ $project: { _id: 1, name: 1, statuses: 1 } }],
     },
   },
   { $unwind: "$project" },
@@ -74,17 +74,27 @@ export const globalSearch = asyncHandler(async (req, res) => {
       {
         $match: {
           project: { $in: projectIds },
-          $or: [{ title: regex }, { description: regex }, { labels: regex }],
+          $or: [
+            { key: q.toUpperCase() },
+            { title: regex },
+            { description: regex },
+            { labels: regex },
+          ],
         },
       },
-      { $sort: { updatedAt: -1 } },
+      // An exact ticket key match comes first
+      { $addFields: { keyMatch: { $eq: ["$key", q.toUpperCase()] } } },
+      { $sort: { keyMatch: -1, updatedAt: -1 } },
       { $limit: limit },
       ...lookupProjectName,
       {
         $project: {
           _id: 1,
+          key: 1,
+          type: 1,
           title: 1,
           status: 1,
+          statusCategory: 1,
           priority: { $ifNull: ["$priority", "medium"] },
           dueDate: 1,
           project: 1,

@@ -53,10 +53,10 @@ import { useTaskSummary } from "@/features/tasks/hooks";
 import { displayName, formatDate, formatRelative } from "@/lib/format";
 import { can, roleDescriptions, roleLabels } from "@/lib/permissions";
 import { projectColor } from "@/lib/project-color";
-import { taskStatusMeta } from "@/lib/task-status";
+import { statusCategoryMeta } from "@/lib/task-status";
 import { cn } from "@/lib/utils";
 import {
-  AvailableTaskStatuses,
+  AvailableStatusCategories,
   AvailableUserRoles,
   UserRoles,
   type UserRole,
@@ -364,11 +364,12 @@ export function ProjectDetailPage() {
                 </span>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
-                {AvailableTaskStatuses.map((status) => {
-                  const meta = taskStatusMeta[status];
+                {/* Grouped by category, so custom workflows still add up */}
+                {AvailableStatusCategories.map((category) => {
+                  const meta = statusCategoryMeta[category];
                   return (
                     <button
-                      key={status}
+                      key={category}
                       type="button"
                       onClick={() => setTab("tasks")}
                       className="flex items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50"
@@ -384,7 +385,7 @@ export function ProjectDetailPage() {
                       </span>
                       {summary ? (
                         <span className="font-heading text-lg font-semibold tabular-nums">
-                          {summary[status]}
+                          {summary[category]}
                         </span>
                       ) : (
                         <Skeleton className="h-5 w-6" />

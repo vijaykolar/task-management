@@ -6,6 +6,7 @@ import type { RouteHandle } from "@/components/layout/app-breadcrumbs";
 import { AppLayout } from "@/components/layout/app-layout";
 import { ProjectCrumb } from "@/components/projects/project-crumb";
 import { AccountPage } from "@/pages/account-page";
+import { BrowseTaskPage } from "@/pages/browse-task-page";
 import { ForgotPasswordPage } from "@/pages/auth/forgot-password-page";
 import { LoginPage } from "@/pages/auth/login-page";
 import { RegisterPage } from "@/pages/auth/register-page";
@@ -64,6 +65,8 @@ export const router = createBrowserRouter([
               },
             ],
           },
+          // Ticket links, e.g. /browse/SPST-12
+          { path: "/browse/:taskKey", element: <BrowseTaskPage /> },
           {
             path: "/my-work",
             element: <MyWorkPage />,

@@ -18,6 +18,10 @@ export const TaskActivityTypeEnum = {
   COMMENT_ADDED: "comment_added",
   SPRINT_CHANGED: "sprint_changed",
   POINTS_CHANGED: "points_changed",
+  TYPE_CHANGED: "type_changed",
+  EPIC_CHANGED: "epic_changed",
+  LINK_ADDED: "link_added",
+  LINK_REMOVED: "link_removed",
   /** Kept after the task is gone so sprint reports stay accurate */
   DELETED: "deleted",
 } as const;
