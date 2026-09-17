@@ -19,10 +19,16 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useLogin, useResendEmailVerification } from "@/features/auth/hooks";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
-import { env } from "@/config/env";
 import { hasErrorCode } from "@/lib/axios";
 import { applyServerFieldErrors } from "@/lib/form-errors";
 import { displayName } from "@/lib/format";
+
+// Shared demo account, prefilled so anyone opening the app can sign in without
+// registering. Public by design — keep it to throwaway data.
+const DEMO_LOGIN: LoginValues = {
+  email: "johndoe@test.com",
+  password: "John1234",
+};
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -34,7 +40,7 @@ export function LoginPage() {
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: env.demoCredentials ?? { email: "", password: "" },
+    defaultValues: { ...DEMO_LOGIN },
   });
 
   const onSubmit = form.handleSubmit((values) => {
@@ -55,12 +61,6 @@ export function LoginPage() {
         title="Welcome back"
         description="Sign in to your account to continue"
       />
-
-      {env.demoCredentials && (
-        <p className="mb-6 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-center text-sm text-muted-foreground">
-          Demo account filled in — just press <strong>Sign in</strong>.
-        </p>
-      )}
 
       <form onSubmit={onSubmit} noValidate>
         <FieldGroup>
