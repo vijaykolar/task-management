@@ -50,8 +50,9 @@ export const AutomationOperatorEnum = {
 export type AutomationOperator =
   (typeof AutomationOperatorEnum)[keyof typeof AutomationOperatorEnum];
 
-export const AvailableAutomationOperators: AutomationOperator[] =
-  Object.values(AutomationOperatorEnum);
+export const AvailableAutomationOperators: AutomationOperator[] = Object.values(
+  AutomationOperatorEnum,
+);
 
 /** Fields a condition can test */
 export const AutomationConditionFieldEnum = {

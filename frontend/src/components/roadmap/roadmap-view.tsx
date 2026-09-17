@@ -499,7 +499,7 @@ function Bar({
                   dragging && "ring-2 ring-primary",
                 )}
               />
-              <span className="pointer-events-none ml-2 whitespace-nowrap text-xs text-muted-foreground">
+              <span className="pointer-events-none ml-2 text-xs whitespace-nowrap text-muted-foreground">
                 {row.task.title}
               </span>
             </>
@@ -553,7 +553,7 @@ function Bar({
             </div>
           )}
           {labelOutside && (
-            <span className="pointer-events-none absolute left-full ml-2 whitespace-nowrap text-xs text-muted-foreground">
+            <span className="pointer-events-none absolute left-full ml-2 text-xs whitespace-nowrap text-muted-foreground">
               {row.task.title}
             </span>
           )}

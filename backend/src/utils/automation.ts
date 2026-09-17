@@ -103,7 +103,8 @@ const matchesTrigger = (
 
   return matching.some(
     (change) =>
-      (!to || sameValue(change.to, to)) && (!from || sameValue(change.from, from)),
+      (!to || sameValue(change.to, to)) &&
+      (!from || sameValue(change.from, from)),
   );
 };
 
@@ -247,7 +248,9 @@ const applyAction = async (
 
   switch (action.type) {
     case AutomationActionEnum.SET_STATUS: {
-      const status = statuses.find((candidate) => candidate.key === action.value);
+      const status = statuses.find(
+        (candidate) => candidate.key === action.value,
+      );
       if (!status || status.key === task.status) return {};
       const from = task.status;
       history.push({
@@ -277,7 +280,11 @@ const applyAction = async (
       task.assignedTo = next;
       return {
         detail: next ? "Reassigned" : "Unassigned",
-        change: { field: "assignee", from, to: next ? String(next) : undefined },
+        change: {
+          field: "assignee",
+          from,
+          to: next ? String(next) : undefined,
+        },
       };
     }
 
@@ -427,10 +434,7 @@ const applyAction = async (
 };
 
 const escapeHtml = (text: string) =>
-  text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const notifyRecipients = async (task: TaskDocument, value?: string) => {
   if (!value || value === "watchers") return watchersOf(task._id);
@@ -590,7 +594,9 @@ const loadProject = async (
 };
 
 export interface TaskAutomationOptions {
-  event: typeof AutomationEventEnum.TASK_CREATED | typeof AutomationEventEnum.TASK_CHANGED;
+  event:
+    | typeof AutomationEventEnum.TASK_CREATED
+    | typeof AutomationEventEnum.TASK_CHANGED;
   task: TaskDocument;
   project: ProjectContext | Types.ObjectId;
   actor?: AutomationActor;
@@ -664,7 +670,9 @@ export interface SprintAutomationOptions {
  * Runs sprint rules over the sprint's tasks. A `create_task` action in a
  * sprint rule makes one task, not one per task in the sprint.
  */
-export const runSprintAutomations = async (options: SprintAutomationOptions) => {
+export const runSprintAutomations = async (
+  options: SprintAutomationOptions,
+) => {
   try {
     const project = await loadProject(options.project);
     if (!project) return;
@@ -766,7 +774,11 @@ export const runScheduledAutomations = async () => {
         $or: [
           { lastRunAt: { $exists: false } },
           { lastRunAt: null },
-          { lastRunAt: { $lt: new Date(startOfDay(dayKey(now, timeZone), timeZone)) } },
+          {
+            lastRunAt: {
+              $lt: new Date(startOfDay(dayKey(now, timeZone), timeZone)),
+            },
+          },
         ],
       },
       { $set: { lastRunAt: new Date(now) } },
@@ -808,7 +820,8 @@ const runScheduledRule = async (
   for (const action of rule.actions) {
     if (action.type !== AutomationActionEnum.CREATE_TASK) continue;
     const made = await createTaskAction(action, project, undefined);
-    if (made) await log(rule, project, made, "applied", [`Created ${made.key}`]);
+    if (made)
+      await log(rule, project, made, "applied", [`Created ${made.key}`]);
   }
 
   const taskActions = rule.actions.filter(

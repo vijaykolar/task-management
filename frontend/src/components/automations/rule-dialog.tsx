@@ -1,5 +1,5 @@
 import { PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -127,13 +127,57 @@ interface RuleDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/**
+ * The dialog only mounts its body while it is open, and the body is keyed by
+ * the rule, so the draft starts from whatever is being edited without an
+ * effect to reset it.
+ */
 export function RuleDialog({
   projectId,
   rule,
   open,
   onOpenChange,
 }: RuleDialogProps) {
-  const [draft, setDraft] = useState<RuleInput>(emptyRule);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{rule ? "Edit rule" : "New rule"}</DialogTitle>
+          <DialogDescription>
+            Rules run on the server, for everyone. Automation never sends email.
+          </DialogDescription>
+        </DialogHeader>
+        <RuleForm
+          key={rule?._id ?? "new"}
+          projectId={projectId}
+          rule={rule}
+          onDone={() => onOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RuleForm({
+  projectId,
+  rule,
+  onDone,
+}: {
+  projectId: string;
+  rule?: AutomationRule;
+  onDone: () => void;
+}) {
+  const [draft, setDraft] = useState<RuleInput>(() =>
+    rule
+      ? {
+          name: rule.name,
+          enabled: rule.enabled,
+          trigger: { ...rule.trigger },
+          conditions: rule.conditions.map((condition) => ({ ...condition })),
+          actions: rule.actions.map((action) => ({ ...action })),
+        }
+      : emptyRule(),
+  );
   const save = useSaveRule(projectId, rule?._id);
   const { statuses } = useProjectWorkflow(projectId);
   const { data: members } = useMemberOptions(projectId);
@@ -147,22 +191,6 @@ export function RuleDialog({
     () => members?.items.map((m) => m.user) ?? [],
     [members],
   );
-
-  // Start from the rule being edited each time the dialog opens
-  useEffect(() => {
-    if (!open) return;
-    setDraft(
-      rule
-        ? {
-            name: rule.name,
-            enabled: rule.enabled,
-            trigger: { ...rule.trigger },
-            conditions: rule.conditions.map((c) => ({ ...c })),
-            actions: rule.actions.map((a) => ({ ...a })),
-          }
-        : emptyRule(),
-    );
-  }, [open, rule]);
 
   const patch = (changes: Partial<RuleInput>) =>
     setDraft((current) => ({ ...current, ...changes }));
@@ -267,336 +295,324 @@ export function RuleDialog({
             }
           : draft.trigger,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: onDone },
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{rule ? "Edit rule" : "New rule"}</DialogTitle>
-          <DialogDescription>
-            Rules run on the server, for everyone. Automation never sends email.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <Label htmlFor="rule-name">Name</Label>
+          <Input
+            id="rule-name"
+            value={draft.name}
+            onChange={(event) => patch({ name: event.target.value })}
+            placeholder="Tidy up finished work"
+          />
+        </div>
 
-        <div className="space-y-5">
-          <div className="space-y-2">
-            <Label htmlFor="rule-name">Name</Label>
-            <Input
-              id="rule-name"
-              value={draft.name}
-              onChange={(event) => patch({ name: event.target.value })}
-              placeholder="Tidy up finished work"
-            />
-          </div>
+        {/* ---------- Trigger ---------- */}
+        <section className="space-y-3 rounded-lg border p-4">
+          <h3 className="text-sm font-medium">When</h3>
+          <Select
+            value={draft.trigger.event}
+            onValueChange={(event) =>
+              setTrigger({
+                event: event as AutomationEvent,
+                field: event === "task_changed" ? "status" : undefined,
+                to: undefined,
+                from: undefined,
+              })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EVENTS.map((event) => (
+                <SelectItem key={event.value} value={event.value}>
+                  {event.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-          {/* ---------- Trigger ---------- */}
-          <section className="space-y-3 rounded-lg border p-4">
-            <h3 className="text-sm font-medium">When</h3>
-            <Select
-              value={draft.trigger.event}
-              onValueChange={(event) =>
-                setTrigger({
-                  event: event as AutomationEvent,
-                  field: event === "task_changed" ? "status" : undefined,
-                  to: undefined,
-                  from: undefined,
+          {isChange && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Select
+                value={draft.trigger.field ?? ""}
+                onValueChange={(field) =>
+                  setTrigger({
+                    field: field as AutomationField,
+                    to: undefined,
+                  })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Which field" />
+                </SelectTrigger>
+                <SelectContent>
+                  {WATCHABLE.map((field) => (
+                    <SelectItem key={field.value} value={field.value}>
+                      {field.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {draft.trigger.field &&
+                !["labels", "dueDate"].includes(draft.trigger.field) && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">
+                      becomes
+                    </span>
+                    {valueInput(draft.trigger.field, draft.trigger.to, (to) =>
+                      setTrigger({ to }),
+                    )}
+                  </div>
+                )}
+            </div>
+          )}
+
+          {isSchedule && (
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Select
+                value={draft.trigger.frequency ?? "daily"}
+                onValueChange={(frequency) =>
+                  setTrigger({ frequency: frequency as "daily" | "weekly" })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Every day</SelectItem>
+                  <SelectItem value="weekly">Every week</SelectItem>
+                </SelectContent>
+              </Select>
+              {draft.trigger.frequency === "weekly" && (
+                <Select
+                  value={String(draft.trigger.weekday ?? 1)}
+                  onValueChange={(weekday) =>
+                    setTrigger({ weekday: Number(weekday) })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WEEKDAYS.map((day, index) => (
+                      <SelectItem key={day} value={String(index)}>
+                        {day}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Select
+                value={String(draft.trigger.hour ?? 9)}
+                onValueChange={(hour) => setTrigger({ hour: Number(hour) })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 24 }, (_, hour) => (
+                    <SelectItem key={hour} value={String(hour)}>
+                      {String(hour).padStart(2, "0")}:00
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {isSchedule && (
+            <p className="text-xs text-muted-foreground">
+              Times follow {draft.trigger.timeZone || browserTimeZone()}. With
+              conditions, the rule sweeps every open task that matches.
+            </p>
+          )}
+        </section>
+
+        {/* ---------- Conditions ---------- */}
+        <section className="space-y-3 rounded-lg border p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium">
+              If <span className="text-muted-foreground">(all must hold)</span>
+            </h3>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                patch({
+                  conditions: [
+                    ...draft.conditions,
+                    { field: "type", op: "is", value: "" },
+                  ],
                 })
               }
             >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {EVENTS.map((event) => (
-                  <SelectItem key={event.value} value={event.value}>
-                    {event.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {isChange && (
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Select
-                  value={draft.trigger.field ?? ""}
-                  onValueChange={(field) =>
-                    setTrigger({
-                      field: field as AutomationField,
-                      to: undefined,
-                    })
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Which field" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {WATCHABLE.map((field) => (
-                      <SelectItem key={field.value} value={field.value}>
-                        {field.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {draft.trigger.field &&
-                  !["labels", "dueDate"].includes(draft.trigger.field) && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">
-                        becomes
-                      </span>
-                      {valueInput(draft.trigger.field, draft.trigger.to, (to) =>
-                        setTrigger({ to }),
-                      )}
-                    </div>
+              <PlusIcon className="size-4" />
+              Add
+            </Button>
+          </div>
+          {draft.conditions.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No conditions — the rule runs every time it is triggered.
+            </p>
+          )}
+          {draft.conditions.map((condition, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <Select
+                value={condition.field}
+                onValueChange={(field) =>
+                  setCondition(index, {
+                    field: field as AutomationConditionField,
+                    value: "",
+                  })
+                }
+              >
+                <SelectTrigger className="h-9 w-40 shrink-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CONDITION_FIELDS.map((field) => (
+                    <SelectItem key={field.value} value={field.value}>
+                      {field.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={condition.op}
+                onValueChange={(op) =>
+                  setCondition(index, { op: op as AutomationOperator })
+                }
+              >
+                <SelectTrigger className="h-9 w-36 shrink-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {OPERATORS.map((op) => (
+                    <SelectItem key={op.value} value={op.value}>
+                      {op.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="min-w-0 flex-1">
+                {!VALUELESS.includes(condition.op) &&
+                  valueInput(condition.field, condition.value, (value) =>
+                    setCondition(index, { value }),
                   )}
               </div>
-            )}
-
-            {isSchedule && (
-              <div className="grid gap-2 sm:grid-cols-3">
-                <Select
-                  value={draft.trigger.frequency ?? "daily"}
-                  onValueChange={(frequency) =>
-                    setTrigger({ frequency: frequency as "daily" | "weekly" })
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Every day</SelectItem>
-                    <SelectItem value="weekly">Every week</SelectItem>
-                  </SelectContent>
-                </Select>
-                {draft.trigger.frequency === "weekly" && (
-                  <Select
-                    value={String(draft.trigger.weekday ?? 1)}
-                    onValueChange={(weekday) =>
-                      setTrigger({ weekday: Number(weekday) })
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WEEKDAYS.map((day, index) => (
-                        <SelectItem key={day} value={String(index)}>
-                          {day}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                <Select
-                  value={String(draft.trigger.hour ?? 9)}
-                  onValueChange={(hour) => setTrigger({ hour: Number(hour) })}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 24 }, (_, hour) => (
-                      <SelectItem key={hour} value={String(hour)}>
-                        {String(hour).padStart(2, "0")}:00
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {isSchedule && (
-              <p className="text-xs text-muted-foreground">
-                Times follow {draft.trigger.timeZone || browserTimeZone()}. With
-                conditions, the rule sweeps every open task that matches.
-              </p>
-            )}
-          </section>
-
-          {/* ---------- Conditions ---------- */}
-          <section className="space-y-3 rounded-lg border p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">
-                If{" "}
-                <span className="text-muted-foreground">(all must hold)</span>
-              </h3>
               <Button
                 type="button"
-                size="sm"
+                size="icon"
                 variant="ghost"
+                className="size-9 shrink-0"
                 onClick={() =>
                   patch({
-                    conditions: [
-                      ...draft.conditions,
-                      { field: "type", op: "is", value: "" },
-                    ],
+                    conditions: draft.conditions.filter((_, i) => i !== index),
                   })
                 }
               >
-                <PlusIcon className="size-4" />
-                Add
+                <XIcon className="size-4" />
+                <span className="sr-only">Remove condition</span>
               </Button>
             </div>
-            {draft.conditions.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                No conditions — the rule runs every time it is triggered.
-              </p>
-            )}
-            {draft.conditions.map((condition, index) => (
-              <div key={index} className="flex items-center gap-2">
-                <Select
-                  value={condition.field}
-                  onValueChange={(field) =>
-                    setCondition(index, {
-                      field: field as AutomationConditionField,
-                      value: "",
-                    })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-40 shrink-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CONDITION_FIELDS.map((field) => (
-                      <SelectItem key={field.value} value={field.value}>
-                        {field.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={condition.op}
-                  onValueChange={(op) =>
-                    setCondition(index, { op: op as AutomationOperator })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-36 shrink-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {OPERATORS.map((op) => (
-                      <SelectItem key={op.value} value={op.value}>
-                        {op.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="min-w-0 flex-1">
-                  {!VALUELESS.includes(condition.op) &&
-                    valueInput(condition.field, condition.value, (value) =>
-                      setCondition(index, { value }),
-                    )}
-                </div>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-9 shrink-0"
-                  onClick={() =>
-                    patch({
-                      conditions: draft.conditions.filter(
-                        (_, i) => i !== index,
-                      ),
-                    })
-                  }
-                >
-                  <XIcon className="size-4" />
-                  <span className="sr-only">Remove condition</span>
-                </Button>
-              </div>
-            ))}
-          </section>
+          ))}
+        </section>
 
-          {/* ---------- Actions ---------- */}
-          <section className="space-y-3 rounded-lg border p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">Then</h3>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() =>
+        {/* ---------- Actions ---------- */}
+        <section className="space-y-3 rounded-lg border p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium">Then</h3>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                patch({
+                  actions: [
+                    ...draft.actions,
+                    { type: "add_comment", text: "" },
+                  ],
+                })
+              }
+            >
+              <PlusIcon className="size-4" />
+              Add
+            </Button>
+          </div>
+          {draft.actions.map((action, index) => (
+            <div key={index} className="flex items-start gap-2">
+              <Select
+                value={action.type}
+                onValueChange={(type) =>
                   patch({
-                    actions: [
-                      ...draft.actions,
-                      { type: "add_comment", text: "" },
-                    ],
+                    actions: draft.actions.map((current, i) =>
+                      i === index
+                        ? { type: type as AutomationActionType }
+                        : current,
+                    ),
                   })
                 }
               >
-                <PlusIcon className="size-4" />
-                Add
+                <SelectTrigger className="h-9 w-44 shrink-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACTIONS.map((entry) => (
+                    <SelectItem key={entry.value} value={entry.value}>
+                      {entry.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="min-w-0 flex-1">
+                <ActionValue
+                  action={action}
+                  onChange={(changes) => setAction(index, changes)}
+                  valueInput={valueInput}
+                  people={people}
+                />
+              </div>
+
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-9 shrink-0"
+                disabled={draft.actions.length === 1}
+                onClick={() =>
+                  patch({
+                    actions: draft.actions.filter((_, i) => i !== index),
+                  })
+                }
+              >
+                <XIcon className="size-4" />
+                <span className="sr-only">Remove action</span>
               </Button>
             </div>
-            {draft.actions.map((action, index) => (
-              <div key={index} className="flex items-start gap-2">
-                <Select
-                  value={action.type}
-                  onValueChange={(type) =>
-                    patch({
-                      actions: draft.actions.map((current, i) =>
-                        i === index
-                          ? { type: type as AutomationActionType }
-                          : current,
-                      ),
-                    })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-44 shrink-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ACTIONS.map((entry) => (
-                      <SelectItem key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          ))}
+        </section>
+      </div>
 
-                <div className="min-w-0 flex-1">
-                  <ActionValue
-                    action={action}
-                    onChange={(changes) => setAction(index, changes)}
-                    valueInput={valueInput}
-                    people={people}
-                  />
-                </div>
-
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-9 shrink-0"
-                  disabled={draft.actions.length === 1}
-                  onClick={() =>
-                    patch({
-                      actions: draft.actions.filter((_, i) => i !== index),
-                    })
-                  }
-                >
-                  <XIcon className="size-4" />
-                  <span className="sr-only">Remove action</span>
-                </Button>
-              </div>
-            ))}
-          </section>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={submit}
-            disabled={!draft.name.trim() || save.isPending}
-          >
-            {rule ? "Save rule" : "Create rule"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      <DialogFooter>
+        <Button variant="outline" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button
+          onClick={submit}
+          disabled={!draft.name.trim() || save.isPending}
+        >
+          {rule ? "Save rule" : "Create rule"}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

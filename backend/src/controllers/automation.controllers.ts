@@ -145,7 +145,8 @@ const parseActions = (body: Record<string, unknown>) => {
     if (value) action.value = value.slice(0, MAX_TEXT);
     const text = asString(item.text);
     if (text) action.text = text.slice(0, MAX_TEXT);
-    if (asString(item.taskType)) action.taskType = asString(item.taskType) as never;
+    if (asString(item.taskType))
+      action.taskType = asString(item.taskType) as never;
 
     if (type === AutomationActionEnum.SET_DUE_DATE && item.days !== null) {
       const days = Number(item.days ?? 0);
