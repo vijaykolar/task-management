@@ -24,9 +24,19 @@ unreliable. Render runs a normal Node server, so everything works.
    ```bash
    node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
    ```
-4. **Email:** Mailtrap's sandbox only captures test mail. For real delivery use
-   Resend / Postmark / SendGrid SMTP — the `MAILTRAP_SMTP_*` variables below
-   take any SMTP host.
+4. **Email:** the `MAILTRAP_SMTP_*` variables take any SMTP host, but
+   **Render blocks outbound ports 25, 465 and 587**, so Gmail and most defaults
+   will simply hang. Pick a provider that offers **port 2525**:
+
+   | Provider | Free tier | Host | Port |
+   | --- | --- | --- | --- |
+   | Brevo (recommended) | 300 emails/day | `smtp-relay.brevo.com` | 2525 |
+   | Mailtrap Sandbox | captures mail, never delivers it | `sandbox.smtp.mailtrap.io` | 2525 |
+   | SendGrid | 100 emails/day | `smtp.sendgrid.net` | 2525 |
+
+   Or skip email entirely for a demo: set `AUTO_VERIFY_EMAIL=true` and new
+   accounts are usable immediately, with no verification mail. Anyone can then
+   register with an address they don't own, so don't leave it on for real use.
 
 ---
 
@@ -61,8 +71,8 @@ REFRESH_TOKEN_EXPIRY=7d
 EMAIL_VERIFICATION_REDIRECT_URL=https://<your-app>.vercel.app/verify-email
 FORGOT_PASSWORD_REDIRECT_URL=https://<your-app>.vercel.app/reset-password
 
-MAILTRAP_SMTP_HOST=<smtp host>
-MAILTRAP_SMTP_PORT=587
+MAILTRAP_SMTP_HOST=smtp-relay.brevo.com
+MAILTRAP_SMTP_PORT=2525
 MAILTRAP_SMTP_USER=<user>
 MAILTRAP_SMTP_PASS=<pass>
 MAIL_FROM=Project Camp <no-reply@example.com>
@@ -98,7 +108,8 @@ links such as `/projects/:id` and caches hashed assets.
 ## 3. Check it works
 
 1. `https://<your-api>.onrender.com/api/v1/healthcheck` returns JSON.
-2. Register an account and open the verification link from the email.
+2. Register an account and open the verification link from the email (with
+   `AUTO_VERIFY_EMAIL=true` the account is ready straight away instead).
 3. Sign in. In DevTools → Application → Cookies, `accessToken` should be
    `Secure` with `SameSite=None`.
 4. Create a project and a task, and upload a file.

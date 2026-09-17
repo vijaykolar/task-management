@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { MailCheckIcon } from "lucide-react";
+import { CircleCheckIcon, MailCheckIcon } from "lucide-react";
 import { Controller, useForm } from "react-hook-form";
 import { Link, useSearchParams } from "react-router";
 
@@ -55,6 +55,24 @@ export function RegisterPage() {
   );
 
   if (register.isSuccess) {
+    // Demo mode (AUTO_VERIFY_EMAIL) creates verified accounts and sends no email
+    if (register.data.data.verificationRequired === false) {
+      return (
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-6 flex size-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+            <CircleCheckIcon className="size-7" />
+          </div>
+          <AuthHeading
+            title="Account created"
+            description="Your account is ready — sign in to get started."
+          />
+          <Button asChild size="lg" className="w-full">
+            <Link to="/login">Continue to sign in</Link>
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center text-center">
         <div className="mb-6 flex size-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">

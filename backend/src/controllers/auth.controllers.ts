@@ -94,6 +94,13 @@ const sendVerificationEmail = async (user: UserDocument) => {
   });
 };
 
+/**
+ * Demo mode: accounts are verified on creation and no email is sent, so the
+ * app works without an email provider. Anyone can then register with an
+ * address they don't own — keep it off for anything real.
+ */
+const autoVerifyEmail = () => process.env.AUTO_VERIFY_EMAIL === "true";
+
 const registerUser = asyncHandler(async (req, res) => {
   const { username, password, fullName } = req.body;
   const email = normalizeEmail(req.body.email);
@@ -106,20 +113,26 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(409, "User with email or username already exists", []);
   }
 
+  const skipVerification = autoVerifyEmail();
   const user = await User.create({
     email,
     password,
     username,
     fullName,
-    isEmailVerified: false,
+    isEmailVerified: skipVerification,
   });
 
-  try {
-    await sendVerificationEmail(user);
-  } catch (error) {
-    // Don't leave an account behind that can never be verified
-    await User.deleteOne({ _id: user._id });
-    throw error;
+  if (skipVerification) {
+    // Invitations are normally accepted when the email is verified
+    await acceptPendingInvites(user);
+  } else {
+    try {
+      await sendVerificationEmail(user);
+    } catch (error) {
+      // Don't leave an account behind that can never be verified
+      await User.deleteOne({ _id: user._id });
+      throw error;
+    }
   }
 
   const createdUser = await User.findById(user._id).select(SAFE_USER_SELECT);
@@ -133,8 +146,10 @@ const registerUser = asyncHandler(async (req, res) => {
     .json(
       new ApiResponse(
         201,
-        { user: createdUser },
-        "User registered successfully and verification email has been sent on your email",
+        { user: createdUser, verificationRequired: !skipVerification },
+        skipVerification
+          ? "Account created. You can sign in now."
+          : "User registered successfully and verification email has been sent on your email",
       ),
     );
 });
@@ -239,7 +254,7 @@ const verifyEmail = asyncHandler<{ verificationToken: string }>(
 const resendEmailVerification = asyncHandler(async (req, res) => {
   const user = await User.findOne({ email: normalizeEmail(req.body.email) });
 
-  if (user && !user.isEmailVerified) {
+  if (user && !user.isEmailVerified && !autoVerifyEmail()) {
     await sendVerificationEmail(user);
   }
 

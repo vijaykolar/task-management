@@ -63,6 +63,12 @@ const sendEmail = async (options: SendEmailOptions): Promise<void> => {
       user: process.env.MAILTRAP_SMTP_USER,
       pass: process.env.MAILTRAP_SMTP_PASS,
     },
+    // Some hosts (Render, Fly…) block outbound ports 25/465/587: fail fast
+    // with a clear error instead of leaving the request hanging. Port 2525 is
+    // usually open — Brevo, Mailtrap and SendGrid all offer it.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 
   try {

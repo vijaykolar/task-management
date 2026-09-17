@@ -26,7 +26,10 @@ export interface ResetPasswordInput {
 // Endpoints under /api/v1/auth — see backend/src/routes/auth.routes.ts
 export const authApi = {
   register: (body: RegisterInput) =>
-    http.post<{ user: User }>("/auth/register", body),
+    http.post<{ user: User; verificationRequired: boolean }>(
+      "/auth/register",
+      body,
+    ),
 
   login: (body: LoginInput) => http.post<LoginResult>("/auth/login", body),
 

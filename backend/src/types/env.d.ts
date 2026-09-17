@@ -9,6 +9,8 @@ declare global {
       TRUST_PROXY?: string;
       COOKIE_SAME_SITE?: "strict" | "lax" | "none";
       COOKIE_SECURE?: string;
+      /** "true" verifies new accounts instantly and sends no email (demo only) */
+      AUTO_VERIFY_EMAIL?: string;
 
       ACCESS_TOKEN_SECRET: string;
       ACCESS_TOKEN_EXPIRY: string;
