@@ -53,9 +53,12 @@ const sendEmail = async (options: SendEmailOptions): Promise<void> => {
     return;
   }
 
+  const port = Number(process.env.MAILTRAP_SMTP_PORT) || 2525;
   const transporter = nodemailer.createTransport({
     host: process.env.MAILTRAP_SMTP_HOST,
-    port: Number(process.env.MAILTRAP_SMTP_PORT) || 2525,
+    port,
+    // 465 is implicit TLS; 587 and 2525 start plain and upgrade via STARTTLS
+    secure: port === 465,
     auth: {
       user: process.env.MAILTRAP_SMTP_USER,
       pass: process.env.MAILTRAP_SMTP_PASS,
