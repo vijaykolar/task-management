@@ -90,3 +90,38 @@ export const uploadAvatar: RequestHandler = (req, res, next) => {
     next(err);
   });
 };
+
+// ---------- Rich text images ----------
+
+// SVG is excluded: images are shown inline, and SVG can carry scripts
+const RICH_TEXT_IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp)$/;
+
+const richTextImageUpload = multer({
+  storage,
+  limits: { fileSize: MAX_ATTACHMENT_SIZE, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (RICH_TEXT_IMAGE_TYPES.test(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new ApiError(400, "Images must be PNG, JPEG, GIF or WebP"));
+    }
+  },
+});
+
+const richTextImageMessages: Partial<Record<multer.ErrorCode, string>> = {
+  LIMIT_FILE_SIZE: `Images must be ${MAX_ATTACHMENT_SIZE / 1024 / 1024} MB or smaller`,
+  LIMIT_FILE_COUNT: "Upload one image at a time",
+  LIMIT_UNEXPECTED_FILE: 'Upload the image in the "image" field',
+};
+
+/** Parses a single `image` pasted or dropped into a rich text editor */
+export const uploadRichTextImage: RequestHandler = (req, res, next) => {
+  richTextImageUpload.single("image")(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError) {
+      return next(
+        new ApiError(400, richTextImageMessages[err.code] ?? err.message),
+      );
+    }
+    next(err);
+  });
+};

@@ -14,6 +14,7 @@ import {
   CodeIcon,
   Heading2Icon,
   Heading3Icon,
+  ImageIcon,
   ItalicIcon,
   LinkIcon,
   ListIcon,
@@ -34,6 +35,14 @@ import {
   type RefObject,
 } from "react";
 
+import {
+  ACCEPTED_IMAGE_TYPES,
+  imageFilesIn,
+  insertImages,
+  stripForeignImages,
+  UploadableImage,
+  type ImageUploader,
+} from "@/components/rich-text/image-upload";
 import {
   MentionList,
   type MentionItem,
@@ -66,6 +75,13 @@ interface RichTextEditorProps {
   "aria-label"?: string;
   /** Enables @mentions; returns the people matching what was typed */
   mentionItems?: (query: string) => MentionItem[];
+  /**
+   * Enables images: pasted, dropped or picked images upload through this and
+   * appear where the cursor (or drop point) is
+   */
+  onImageUpload?: ImageUploader;
+  /** Called with the number of images still uploading (block saving until 0) */
+  onUploadingChange?: (uploading: number) => void;
 }
 
 /** Marks popups rendered outside the editor (e.g. mentions) so dialogs ignore them */
@@ -140,12 +156,25 @@ export function RichTextEditor({
   id,
   "aria-label": ariaLabel,
   mentionItems,
+  onImageUpload,
+  onUploadingChange,
 }: RichTextEditorProps) {
-  // The editor is configured once; read the latest items through a ref
+  // The editor is configured once; read the latest callbacks through refs
   const mentionItemsRef = useRef(mentionItems);
+  const uploadRef = useRef(onImageUpload);
+  const uploadingChangeRef = useRef(onUploadingChange);
   useEffect(() => {
     mentionItemsRef.current = mentionItems;
+    uploadRef.current = onImageUpload;
+    uploadingChangeRef.current = onUploadingChange;
   });
+
+  const uploadingRef = useRef(0);
+  const trackUpload = (delta: number) => {
+    uploadingRef.current += delta;
+    uploadingChangeRef.current?.(uploadingRef.current);
+  };
+  const canUploadImages = !!onImageUpload;
   const [extensions] = useState(() => [
     StarterKit.configure({
       heading: { levels: [2, 3] },
@@ -161,6 +190,7 @@ export function RichTextEditor({
     }),
     Placeholder.configure({ placeholder }),
     ...(mentionItems ? [mentionExtension(mentionItemsRef)] : []),
+    ...(onImageUpload ? [UploadableImage] : []),
   ]);
 
   const editor = useEditor({
@@ -181,6 +211,29 @@ export function RichTextEditor({
           contentClassName,
         ),
       },
+      // Images pasted from the clipboard (e.g. screenshots) go where the cursor is
+      handlePaste: (view, event) => {
+        const upload = uploadRef.current;
+        const files = imageFilesIn(event.clipboardData?.files);
+        if (!upload || files.length === 0) return false;
+        event.preventDefault();
+        insertImages(view, files, upload, trackUpload);
+        return true;
+      },
+      // Dropped images go where they are dropped
+      handleDrop: (view, event, _slice, moved) => {
+        const upload = uploadRef.current;
+        const files = imageFilesIn(event.dataTransfer?.files);
+        if (moved || !upload || files.length === 0) return false;
+        event.preventDefault();
+        const pos = view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        })?.pos;
+        insertImages(view, files, upload, trackUpload, pos);
+        return true;
+      },
+      transformPastedHTML: (html) => stripForeignImages(html),
       handleKeyDown: (_view, event) => {
         if (
           onSubmitShortcut &&
@@ -206,7 +259,20 @@ export function RichTextEditor({
         className,
       )}
     >
-      <Toolbar editor={editor} />
+      <Toolbar
+        editor={editor}
+        onPickImages={
+          canUploadImages
+            ? (files) =>
+                insertImages(
+                  editor.view,
+                  files,
+                  uploadRef.current!,
+                  trackUpload,
+                )
+            : undefined
+        }
+      />
       <EditorContent editor={editor} />
     </div>
   );
@@ -244,7 +310,14 @@ function ToolbarButton({
   );
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+function Toolbar({
+  editor,
+  onPickImages,
+}: {
+  editor: Editor;
+  onPickImages?: (files: File[]) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const state = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
@@ -346,6 +419,28 @@ function Toolbar({ editor }: { editor: Editor }) {
         active={state.codeBlock}
         onClick={() => chain().toggleCodeBlock().run()}
       />
+      {onPickImages && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_IMAGE_TYPES}
+            className="sr-only"
+            tabIndex={-1}
+            onChange={(event) => {
+              const files = imageFilesIn(event.target.files);
+              event.target.value = "";
+              if (files.length > 0) onPickImages(files);
+            }}
+          />
+          <ToolbarButton
+            icon={ImageIcon}
+            label="Insert image (or paste one)"
+            onClick={() => fileInputRef.current?.click()}
+          />
+        </>
+      )}
 
       <div className="ml-auto flex gap-0.5">
         <ToolbarButton

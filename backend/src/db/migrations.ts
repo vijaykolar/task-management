@@ -102,6 +102,38 @@ const backfillTaskFields = async () => {
   }
 };
 
+/**
+ * Task descriptions used to be plain text. Convert them to rich text HTML and
+ * store the plain text copy used for search.
+ */
+const convertPlainTextDescriptions = async () => {
+  const legacy = await Task.find(
+    {
+      description: { $exists: true, $ne: "" },
+      descriptionText: { $exists: false },
+    },
+    "_id description",
+  ).lean();
+  if (legacy.length === 0) return;
+
+  await Task.bulkWrite(
+    legacy.map((task) => ({
+      updateOne: {
+        filter: { _id: task._id },
+        update: {
+          $set: {
+            description: plainTextToRichText(task.description ?? ""),
+            descriptionText: task.description,
+          },
+        },
+      },
+    })),
+  );
+  console.log(
+    `🛠  Converted ${legacy.length} plain-text task descriptions to rich text`,
+  );
+};
+
 /** Projects created before custom workflows get the default statuses */
 const backfillProjectWorkflows = async () => {
   const result = await Project.updateMany(
@@ -189,6 +221,7 @@ export const runMigrations = async () => {
   await removeDuplicateMemberships();
   await convertPlainTextNotes();
   await backfillTaskFields();
+  await convertPlainTextDescriptions();
   await backfillProjectWorkflows();
   await backfillTicketKeys();
 

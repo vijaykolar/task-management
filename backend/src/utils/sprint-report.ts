@@ -166,7 +166,7 @@ export const dayKey = (instant: Date | number, timeZone: string) => {
 };
 
 /** The instant a calendar day starts in `timeZone` */
-const startOfDay = (key: string, timeZone: string) => {
+export const startOfDay = (key: string, timeZone: string) => {
   const midnightUtc = Date.parse(`${key}T00:00:00.000Z`);
   let instant = midnightUtc - zoneOffset(midnightUtc, timeZone);
   // A second pass settles days where the offset changes (DST)

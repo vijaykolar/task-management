@@ -54,6 +54,17 @@ export const projectsApi = {
 
   remove: (projectId: string) => http.delete<Project>(`/projects/${projectId}`),
 
+  /** An image pasted or dropped into rich text; resolves to its URL */
+  uploadImage: (projectId: string, file: File) => {
+    const form = new FormData();
+    form.append("image", file, file.name || "pasted-image.png");
+    return http.post<{ url: string; name: string; size: number }>(
+      `/projects/${projectId}/images`,
+      form,
+      { timeout: 60_000 },
+    );
+  },
+
   updateWorkflow: (projectId: string, body: WorkflowInput) =>
     http.put<ProjectStatus[]>(`/projects/${projectId}/statuses`, body),
 

@@ -4,6 +4,11 @@ import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
 import { FormAlert } from "@/components/common/form-alert";
+import { RichTextEditor } from "@/components/rich-text/lazy-rich-text-editor";
+import {
+  useImageUploads,
+  useMentionItems,
+} from "@/components/rich-text/use-rich-text-helpers";
 import { AssigneeSelect } from "@/components/tasks/assignee-select";
 import { FilePicker } from "@/components/tasks/file-picker";
 import {
@@ -33,7 +38,6 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { useCreateTask, useUpdateTask } from "@/features/tasks/hooks";
 import {
   taskSchema,
@@ -86,7 +90,25 @@ export function TaskFormDialog({
 }: TaskFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-xl">
+      <DialogContent
+        className="max-h-[90svh] overflow-y-auto sm:max-w-2xl"
+        // The @mention popup lives outside the dialog; using it must not
+        // close the dialog
+        onInteractOutside={(event) => {
+          if (
+            (event.target as HTMLElement | null)?.closest?.(
+              "[data-floating-popup]",
+            )
+          ) {
+            event.preventDefault();
+          }
+        }}
+        onEscapeKeyDown={(event) => {
+          if (document.querySelector("[data-floating-popup]")) {
+            event.preventDefault();
+          }
+        }}
+      >
         {/* Mounted only while open, so form + mutation state start fresh */}
         <TaskForm {...props} onDone={() => onOpenChange(false)} />
       </DialogContent>
@@ -109,6 +131,8 @@ function TaskForm({
   const updateTask = useUpdateTask(projectId);
   const mutation = isEdit ? updateTask : createTask;
   const [files, setFiles] = useState<File[]>([]);
+  const mentionItems = useMentionItems(projectId);
+  const images = useImageUploads(projectId);
 
   const form = useForm<TaskValues>({
     resolver: zodResolver(taskSchema),
@@ -133,7 +157,7 @@ function TaskForm({
   const filesError = validateFiles(files, existingCount);
 
   const onSubmit = form.handleSubmit(({ storyPoints: pointsText, ...rest }) => {
-    if (filesError) return;
+    if (filesError || images.uploading > 0) return;
     const values = {
       ...rest,
       // Epics sit above sprints and can't have an epic themselves
@@ -218,13 +242,16 @@ function TaskForm({
           render={({ field, fieldState }) => (
             <Field data-invalid={fieldState.invalid}>
               <FieldLabel htmlFor="task-description">Description</FieldLabel>
-              <Textarea
-                {...field}
+              <RichTextEditor
                 id="task-description"
-                rows={4}
-                placeholder="Add context, acceptance criteria, links…"
-                aria-invalid={fieldState.invalid}
-                className="max-h-60"
+                aria-label="Description"
+                value={field.value}
+                onChange={field.onChange}
+                placeholder="Add context, acceptance criteria, links… Type @ to mention someone or paste a screenshot"
+                invalid={fieldState.invalid}
+                mentionItems={mentionItems}
+                {...images.editorProps}
+                contentClassName="max-h-72 min-h-28 overflow-y-auto"
               />
               <FieldError errors={[fieldState.error]} />
             </Field>
@@ -441,9 +468,16 @@ function TaskForm({
             Cancel
           </Button>
         </DialogClose>
-        <Button type="submit" disabled={mutation.isPending || !!filesError}>
-          {mutation.isPending && <Spinner />}
-          {isEdit ? "Save changes" : "Create task"}
+        <Button
+          type="submit"
+          disabled={mutation.isPending || !!filesError || images.uploading > 0}
+        >
+          {(mutation.isPending || images.uploading > 0) && <Spinner />}
+          {images.uploading > 0
+            ? "Uploading image…"
+            : isEdit
+              ? "Save changes"
+              : "Create task"}
         </Button>
       </DialogFooter>
     </form>

@@ -45,7 +45,7 @@ import {
   searchRegex,
 } from "../utils/pagination.js";
 import { requireUser } from "../utils/request-user.js";
-import { frontendUrl } from "../utils/urls.js";
+import { frontendUrl, serverUrl } from "../utils/urls.js";
 import {
   PROJECT_KEY_PATTERN,
   newStatusKey,
@@ -869,7 +869,33 @@ const updateProjectStatuses = asyncHandler<ProjectParams>(async (req, res) => {
     .json(new ApiResponse(200, projectStatuses(project), "Workflow updated"));
 });
 
+// ---------- Rich text images ----------
+
+/**
+ * POST /projects/:projectId/images (multipart `image`) — stores an image
+ * pasted or dropped into a description, comment or note and returns its URL
+ * for the editor to embed.
+ */
+const uploadImage = asyncHandler<ProjectParams>(async (req, res) => {
+  const file = req.file;
+  if (!file) {
+    throw new ApiError(400, "Choose an image to upload");
+  }
+  return res.status(201).json(
+    new ApiResponse(
+      201,
+      {
+        url: `${serverUrl(req)}/images/${file.filename}`,
+        name: file.originalname,
+        size: file.size,
+      },
+      "Image uploaded",
+    ),
+  );
+});
+
 export {
+  uploadImage,
   updateProjectStatuses,
   addMembersToProject,
   createProject,

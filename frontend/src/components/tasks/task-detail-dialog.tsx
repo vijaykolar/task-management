@@ -33,6 +33,7 @@ import { AttachmentList } from "@/components/tasks/attachment-list";
 import { SubtaskList } from "@/components/tasks/subtask-list";
 import { TaskActivityList } from "@/components/tasks/task-activity";
 import { TaskComments } from "@/components/tasks/task-comments";
+import { TaskDescription } from "@/components/tasks/task-description";
 import {
   DueDateBadge,
   DueDatePicker,
@@ -380,17 +381,16 @@ function TaskDetailContent({
             )}
           </div>
 
-          <section>
-            {data.description ? (
-              <p className="text-sm leading-relaxed wrap-break-word whitespace-pre-wrap">
-                {data.description}
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">
-                No description provided.
-              </p>
-            )}
-          </section>
+          {isPartial ? (
+            <Skeleton className="h-16 w-full" />
+          ) : (
+            <TaskDescription
+              projectId={projectId}
+              taskId={taskId}
+              description={data.description}
+              canEdit={canManage}
+            />
+          )}
 
           {isEpic && (
             <EpicChildren

@@ -77,7 +77,7 @@ export const globalSearch = asyncHandler(async (req, res) => {
           $or: [
             { key: q.toUpperCase() },
             { title: regex },
-            { description: regex },
+            { descriptionText: regex },
             { labels: regex },
           ],
         },

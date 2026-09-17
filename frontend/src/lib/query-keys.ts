@@ -63,6 +63,8 @@ export const queryKeys = {
         sprintId,
         timeZone,
       ] as const,
+    dashboard: (projectId: string, params: object) =>
+      [...queryKeys.tasks.reports(projectId), "dashboard", params] as const,
     velocity: (projectId: string, limit: number) =>
       [...queryKeys.tasks.reports(projectId), "velocity", limit] as const,
   },

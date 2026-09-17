@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  getProjectDashboard,
   getSprintReport,
   getVelocity,
 } from "../controllers/report.controllers.js";
@@ -9,7 +10,10 @@ import {
 } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validator.middleware.js";
 import { AvailableUserRole } from "../utils/constants.js";
-import { reportQueryValidator } from "../validators/index.js";
+import {
+  dashboardQueryValidator,
+  reportQueryValidator,
+} from "../validators/index.js";
 
 const router = Router();
 router.use(verifyJWT);
@@ -30,6 +34,15 @@ router
     reportQueryValidator(),
     validate,
     getVelocity,
+  );
+
+router
+  .route("/:projectId/dashboard")
+  .get(
+    validateProjectPermission(AvailableUserRole),
+    dashboardQueryValidator(),
+    validate,
+    getProjectDashboard,
   );
 
 export default router;

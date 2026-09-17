@@ -38,9 +38,10 @@ const taskCommentSchema = new Schema<ITaskComment>(
       type: String,
       required: true,
     },
+    // Empty for comments that are only images
     bodyText: {
       type: String,
-      required: true,
+      default: "",
     },
     editedAt: Date,
   },

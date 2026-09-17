@@ -2,7 +2,19 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { http } from "@/lib/axios";
 import { queryKeys } from "@/lib/query-keys";
-import type { SprintReport, VelocityReport } from "@/types/models";
+import type {
+  ProjectDashboard,
+  SprintReport,
+  TaskType,
+  VelocityReport,
+} from "@/types/models";
+
+export interface DashboardParams {
+  /** 7 to 90 */
+  days: number;
+  /** One issue type; omit for all work (epics excluded) */
+  type?: TaskType;
+}
 
 // Endpoints under /api/v1/reports — see backend/src/routes/report.routes.ts
 export const reportsApi = {
@@ -10,6 +22,8 @@ export const reportsApi = {
     http.get<SprintReport>(`/reports/${projectId}/sprints/${sprintId}`, {
       params: { tz: timeZone },
     }),
+  dashboard: (projectId: string, params: DashboardParams & { tz: string }) =>
+    http.get<ProjectDashboard>(`/reports/${projectId}/dashboard`, { params }),
   velocity: (projectId: string, limit: number) =>
     http.get<VelocityReport>(`/reports/${projectId}/velocity`, {
       params: { limit },
@@ -44,6 +58,19 @@ export function useVelocity(projectId: string, limit: number) {
     queryKey: queryKeys.tasks.velocity(projectId, limit),
     queryFn: () =>
       reportsApi.velocity(projectId, limit).then((res) => res.data),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useProjectDashboard(
+  projectId: string,
+  params: DashboardParams,
+) {
+  const query = { ...params, tz: browserTimeZone() };
+  return useQuery({
+    queryKey: queryKeys.tasks.dashboard(projectId, query),
+    queryFn: () =>
+      reportsApi.dashboard(projectId, query).then((res) => res.data),
     placeholderData: keepPreviousData,
   });
 }

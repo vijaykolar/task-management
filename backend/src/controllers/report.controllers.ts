@@ -2,6 +2,8 @@ import { Sprint, SprintStatusEnum } from "../models/sprint.models.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
+import { AvailableTaskTypes, type TaskType } from "../utils/constants.js";
+import { buildProjectDashboard } from "../utils/dashboard.js";
 import { toObjectId } from "../utils/object-id.js";
 import { buildSprintReport, toSprintStats } from "../utils/sprint-report.js";
 import { findSprintInProject } from "../utils/sprints.js";
@@ -86,4 +88,27 @@ const getVelocity = asyncHandler<ProjectParams>(async (req, res) => {
     .json(new ApiResponse(200, { sprints: rows, average }, "Velocity fetched"));
 });
 
-export { getSprintReport, getVelocity };
+const DEFAULT_DASHBOARD_DAYS = 30;
+
+/**
+ * GET /reports/:projectId/dashboard?days=7..90&tz&type — created vs resolved,
+ * workload, issues by status and epic progress
+ */
+const getProjectDashboard = asyncHandler<ProjectParams>(async (req, res) => {
+  const type = AvailableTaskTypes.includes(req.query.type as TaskType)
+    ? (req.query.type as TaskType)
+    : undefined;
+  const dashboard = await buildProjectDashboard(
+    toObjectId(req.params.projectId, "project id"),
+    {
+      days: Number(req.query.days) || DEFAULT_DASHBOARD_DAYS,
+      timeZone: typeof req.query.tz === "string" ? req.query.tz : "UTC",
+      type,
+    },
+  );
+  return res
+    .status(200)
+    .json(new ApiResponse(200, dashboard, "Dashboard fetched"));
+});
+
+export { getProjectDashboard, getSprintReport, getVelocity };

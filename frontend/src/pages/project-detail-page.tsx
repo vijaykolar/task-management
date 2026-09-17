@@ -22,6 +22,7 @@ import { RoleBadge } from "@/components/common/role-badge";
 import { UserAvatar } from "@/components/common/user-avatar";
 import { MembersPanel } from "@/components/members/members-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
+import { ProjectDashboard } from "@/components/dashboard/project-dashboard";
 import { DeleteProjectDialog } from "@/components/projects/delete-project-dialog";
 import { ProjectFormDialog } from "@/components/projects/project-form-dialog";
 import { ProjectSettings } from "@/components/projects/project-settings";
@@ -396,6 +397,14 @@ export function ProjectDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          <ProjectDashboard
+            projectId={projectId}
+            className="lg:col-span-3"
+            onOpenTask={(taskId) =>
+              setSearchParams({ tab: "tasks", task: taskId })
+            }
+          />
 
           <Card className="lg:col-span-3">
             <CardHeader>

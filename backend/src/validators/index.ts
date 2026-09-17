@@ -169,11 +169,17 @@ const taskFieldValidators = (isCreate: boolean): ValidationChain[] => {
     )
       .isLength({ max: 200 })
       .withMessage("Title must be at most 200 characters"),
+    // Rich text; the limit applies to its visible text
     body("description")
       .optional()
-      .trim()
-      .isLength({ max: 5000 })
-      .withMessage("Description must be at most 5000 characters"),
+      .isString()
+      .withMessage("Description is invalid")
+      .bail()
+      .isLength({ max: 200_000 })
+      .withMessage("Description is too long")
+      .bail()
+      .custom((value: string) => prepareRichText(value).text.length <= 5000)
+      .withMessage("Description must be at most 5,000 characters"),
     // Checked against the project's workflow in the controller
     body("status")
       .optional()
@@ -309,7 +315,7 @@ const richTextField = (field: string, label: string, maxChars: number) =>
     .isLength({ max: 200_000 })
     .withMessage(`${label} is too long`)
     .bail()
-    .custom((value: string) => prepareRichText(value).text.length > 0)
+    .custom((value: string) => !prepareRichText(value).isEmpty)
     .withMessage(`${label} can't be empty`)
     .custom((value: string) => prepareRichText(value).text.length <= maxChars)
     .withMessage(
@@ -367,7 +373,26 @@ const reportQueryValidator = (): ValidationChain[] => {
   ];
 };
 
+const dashboardQueryValidator = (): ValidationChain[] => {
+  return [
+    query("tz")
+      .optional()
+      .custom(isValidTimeZone)
+      .withMessage("Time zone is invalid"),
+    query("days")
+      .optional()
+      .isInt({ min: 7, max: 90 })
+      .withMessage("Days must be between 7 and 90")
+      .toInt(),
+    query("type")
+      .optional()
+      .isIn(AvailableTaskTypes)
+      .withMessage("Issue type is invalid"),
+  ];
+};
+
 export {
+  dashboardQueryValidator,
   bulkTaskValidator,
   savedFilterValidator,
   taskLinkValidator,

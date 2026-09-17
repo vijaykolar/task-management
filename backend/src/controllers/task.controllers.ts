@@ -53,7 +53,11 @@ import {
 } from "../utils/pagination.js";
 import type { AuthenticatedUser } from "../types/auth.js";
 import { requireUser } from "../utils/request-user.js";
-import { extractMentionIds, prepareRichText } from "../utils/rich-text.js";
+import {
+  extractMentionIds,
+  prepareRichText,
+  richTextToPlainText,
+} from "../utils/rich-text.js";
 import { sprintSnapshot } from "../utils/sprints.js";
 import {
   dueDateKey,
@@ -264,6 +268,26 @@ const projectSummary = async (projectId: Types.ObjectId) => {
   return { _id: projectId, name: project?.name ?? "a project" };
 };
 
+/** Tells people newly @mentioned in a task description */
+const notifyDescriptionMentions = async (
+  actor: AuthenticatedUser,
+  task: { _id: Types.ObjectId; title: string; project: Types.ObjectId },
+  html: string,
+  previousHtml = "",
+) => {
+  const before = new Set(extractMentionIds(previousHtml));
+  const mentioned = extractMentionIds(html).filter((id) => !before.has(id));
+  if (mentioned.length === 0) return;
+  await notify({
+    type: NotificationTypeEnum.MENTIONED,
+    recipients: mentioned,
+    actor,
+    project: await projectSummary(task.project),
+    task,
+    excerpt: richTextToPlainText(html),
+  });
+};
+
 const notifyAssignee = async (
   actor: AuthenticatedUser,
   task: { _id: Types.ObjectId; title: string; project: Types.ObjectId },
@@ -368,7 +392,7 @@ const buildTaskFilter = async (
     filter.$or = [
       { key: search.toUpperCase() },
       { title: searchRegex(search) },
-      { description: searchRegex(search) },
+      { descriptionText: searchRegex(search) },
       { labels: searchRegex(search) },
     ];
   }
@@ -466,6 +490,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
           $project: {
             subtasks: 0,
             attachments: 0,
+            descriptionText: 0,
             comments: 0,
             titleLower: 0,
             dueSort: 0,
@@ -575,7 +600,8 @@ const getProjectLabels = asyncHandler<ProjectParams>(async (req, res) => {
 });
 
 const createTask = asyncHandler<ProjectParams>(async (req, res) => {
-  const { title, description, assignedTo, priority } = req.body;
+  const { title, assignedTo, priority } = req.body;
+  const description = prepareRichText(req.body.description);
   const projectId = toObjectId(req.params.projectId, "project id");
   const currentUser = requireUser(req);
   const files = getUploadedFiles(req);
@@ -601,7 +627,8 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
       key,
       type,
       title,
-      description,
+      description: description.isEmpty ? undefined : description.html,
+      descriptionText: description.isEmpty ? undefined : description.text,
       project: projectId,
       assignedTo: assignee,
       status: status.key,
@@ -638,6 +665,7 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
     }
     await logActivity(task, currentUser._id, history);
     await notifyAssignee(currentUser, task, assignee);
+    await notifyDescriptionMentions(currentUser, task, task.description ?? "");
 
     return res
       .status(201)
@@ -696,7 +724,13 @@ const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
         },
       },
     },
-    { $project: { "attachments.localPath": 0, children: 0 } },
+    {
+      $project: {
+        "attachments.localPath": 0,
+        children: 0,
+        descriptionText: 0,
+      },
+    },
   ] as PipelineStage[]);
 
   if (!task[0]) {
@@ -731,6 +765,8 @@ const getTaskByKey = asyncHandler<{ taskKey: string }>(async (req, res) => {
 interface TaskChanges {
   history: ActivityEntry[];
   newAssignee?: Types.ObjectId;
+  /** The description before this change, to find new @mentions */
+  previousDescription?: string;
   /** The task stopped being an epic, so its children lose their epic */
   demotedEpic: boolean;
 }
@@ -756,12 +792,15 @@ const applyTaskChanges = async (
     });
     task.title = title;
   }
-  if (
-    typeof description === "string" &&
-    description !== (task.description ?? "")
-  ) {
-    history.push({ type: TaskActivityTypeEnum.DESCRIPTION_CHANGED });
-    task.description = description;
+  if (typeof description === "string") {
+    const next = prepareRichText(description);
+    const html = next.isEmpty ? "" : next.html;
+    if (html !== (task.description ?? "")) {
+      history.push({ type: TaskActivityTypeEnum.DESCRIPTION_CHANGED });
+      changes.previousDescription = task.description ?? "";
+      task.description = html || undefined;
+      task.descriptionText = html ? next.text : undefined;
+    }
   }
   if (body.status !== undefined && body.status !== task.status) {
     const status = resolveStatus(project, body.status);
@@ -927,6 +966,14 @@ const saveTaskChanges = async (
   await task.save();
   await logActivity(task, actor._id, changes.history);
   await notifyAssignee(actor, task, changes.newAssignee);
+  if (changes.previousDescription !== undefined) {
+    await notifyDescriptionMentions(
+      actor,
+      task,
+      task.description ?? "",
+      changes.previousDescription,
+    );
+  }
   if (changes.demotedEpic) await releaseEpicChildren(task, actor._id);
 };
 
@@ -980,6 +1027,7 @@ const removeTask = async (task: TaskDocument, actor: Types.ObjectId) => {
       from: {
         title: task.title,
         key: task.key,
+        type: task.type,
         status: task.status,
         storyPoints: task.storyPoints ?? null,
         sprint: await sprintSnapshot(task.sprint),
@@ -1693,7 +1741,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
     filter.$or = [
       { key: query.search.toUpperCase() },
       { title: searchRegex(query.search) },
-      { description: searchRegex(query.search) },
+      { descriptionText: searchRegex(query.search) },
     ];
   }
 
@@ -1745,6 +1793,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
         {
           $project: {
             attachments: 0,
+            descriptionText: 0,
             dueSort: 0,
             priorityRank: 0,
             description: 0,

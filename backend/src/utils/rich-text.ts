@@ -1,6 +1,13 @@
 import sanitizeHtml from "sanitize-html";
 
 /**
+ * Images must be files uploaded to this API (`/images/<generated name>`), so
+ * rich text can't embed tracking pixels or third-party content.
+ */
+export const UPLOADED_IMAGE_PATTERN =
+  /^https?:\/\/[^\s"'<>]+\/images\/\d+-[0-9a-f]{16}\.(png|jpe?g|gif|webp)$/i;
+
+/**
  * Tags produced by the frontend editor (Tiptap StarterKit). Anything else —
  * scripts, styles, event handlers, iframes — is stripped before saving.
  */
@@ -26,17 +33,23 @@ const RICH_TEXT_OPTIONS: sanitizeHtml.IOptions = {
     "hr",
     "a",
     "span",
+    "img",
   ],
   allowedAttributes: {
     a: ["href", "target", "rel"],
     ol: ["start"],
     // @mentions: <span data-type="mention" data-id="<userId>" data-label="name">
     span: ["data-type", "data-id", "data-label", "class"],
+    img: ["src", "alt"],
   },
   allowedClasses: {
     span: ["mention"],
   },
   allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemesByTag: { img: ["http", "https"] },
+  exclusiveFilter: (frame) =>
+    frame.tag === "img" &&
+    !UPLOADED_IMAGE_PATTERN.test(frame.attribs.src ?? ""),
   transformTags: {
     // Links always open safely in a new tab
     a: sanitizeHtml.simpleTransform("a", {
@@ -100,5 +113,11 @@ export const plainTextToRichText = (text: string) =>
 /** Sanitized HTML plus its plain text, ready to store */
 export const prepareRichText = (html: unknown) => {
   const content = sanitizeRichText(typeof html === "string" ? html : "");
-  return { html: content, text: richTextToPlainText(content) };
+  const text = richTextToPlainText(content);
+  return {
+    html: content,
+    text,
+    // An image on its own is content too (e.g. a pasted screenshot)
+    isEmpty: text.length === 0 && !/<img\s/i.test(content),
+  };
 };

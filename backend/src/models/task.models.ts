@@ -31,7 +31,10 @@ export interface ITask {
   key: string;
   type: TaskType;
   title: string;
+  /** Sanitized rich text HTML */
   description?: string;
+  /** Plain text of `description`, for search */
+  descriptionText?: string;
   project: Types.ObjectId;
   assignedTo?: Types.ObjectId;
   assignedBy?: Types.ObjectId;
@@ -71,6 +74,7 @@ const taskSchema = new Schema<ITask>(
       trim: true,
     },
     description: String,
+    descriptionText: String,
     project: {
       type: Schema.Types.ObjectId,
       ref: "Project",

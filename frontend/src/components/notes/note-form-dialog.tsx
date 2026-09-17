@@ -3,6 +3,7 @@ import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { FormAlert } from "@/components/common/form-alert";
 import { RichTextEditor } from "@/components/rich-text/lazy-rich-text-editor";
+import { useImageUploads } from "@/components/rich-text/use-rich-text-helpers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -65,6 +66,7 @@ function NoteForm({
   const createNote = useCreateNote(projectId);
   const updateNote = useUpdateNote(projectId);
   const mutation = isEdit ? updateNote : createNote;
+  const images = useImageUploads(projectId);
 
   const form = useForm<NoteValues>({
     resolver: zodResolver(noteSchema),
@@ -75,6 +77,7 @@ function NoteForm({
   ).length;
 
   const onSubmit = form.handleSubmit(({ content }) => {
+    if (images.uploading > 0) return;
     const options = {
       onSuccess: onDone,
       onError: (error: unknown) =>
@@ -110,7 +113,8 @@ function NoteForm({
                 aria-label="Note content"
                 value={field.value}
                 onChange={field.onChange}
-                placeholder="Meeting notes, decisions, links, reminders…"
+                placeholder="Meeting notes, decisions, links, reminders… Paste images too"
+                {...images.editorProps}
                 invalid={fieldState.invalid}
                 autoFocus
                 onSubmitShortcut={onSubmit}
@@ -140,9 +144,16 @@ function NoteForm({
             Cancel
           </Button>
         </DialogClose>
-        <Button type="submit" disabled={mutation.isPending}>
-          {mutation.isPending && <Spinner />}
-          {isEdit ? "Save note" : "Add note"}
+        <Button
+          type="submit"
+          disabled={mutation.isPending || images.uploading > 0}
+        >
+          {(mutation.isPending || images.uploading > 0) && <Spinner />}
+          {images.uploading > 0
+            ? "Uploading image…"
+            : isEdit
+              ? "Save note"
+              : "Add note"}
         </Button>
       </DialogFooter>
     </form>

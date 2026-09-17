@@ -486,6 +486,45 @@ export interface VelocityReport {
 
 export type ReportUnit = keyof Tally;
 
+/** GET /reports/:projectId/dashboard */
+export interface ProjectDashboard {
+  range: { days: number; from: string; to: string; timeZone: string };
+  totals: {
+    open: number;
+    inProgress: number;
+    overdue: number;
+    unassigned: number;
+    /** Within the range */
+    created: number;
+    resolved: number;
+  };
+  /** One entry per day of the range, oldest first */
+  createdVsResolved: { date: string; created: number; resolved: number }[];
+  /** Open work per person; `user` null = unassigned */
+  workload: {
+    user: UserSummary | null;
+    todo: number;
+    inProgress: number;
+    points: number;
+  }[];
+  statuses: {
+    key: string;
+    name: string;
+    category: StatusCategory;
+    count: number;
+  }[];
+  epics: {
+    _id: string;
+    key: string;
+    title: string;
+    statusCategory: StatusCategory;
+    total: number;
+    done: number;
+    points: number;
+    donePoints: number;
+  }[];
+}
+
 // ---------- My work ----------
 
 export interface MyTask extends Omit<

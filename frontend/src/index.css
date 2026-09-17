@@ -173,6 +173,20 @@
   .rich-text hr {
     @apply my-4 border-border;
   }
+  .rich-text img {
+    @apply my-2 h-auto max-h-[28rem] max-w-full rounded-lg border object-contain;
+  }
+  /* Rendered content: images open full size */
+  .rich-text:not([contenteditable]) img {
+    @apply cursor-zoom-in;
+  }
+  .rich-text img.ProseMirror-selectednode {
+    @apply ring-3 ring-ring/50;
+  }
+  /* Local preview while a pasted image uploads */
+  .rich-text img[data-uploading] {
+    @apply animate-pulse opacity-60;
+  }
   .rich-text .mention {
     @apply rounded-md bg-primary/10 px-1 py-0.5 font-medium text-primary;
     box-decoration-break: clone;

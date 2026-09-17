@@ -17,9 +17,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import type { MentionItem } from "@/components/rich-text/mention-list";
+import {
+  useImageUploads,
+  useMentionItems,
+} from "@/components/rich-text/use-rich-text-helpers";
 import { useCurrentUser } from "@/features/auth/hooks";
-import { useMemberOptions } from "@/features/projects/hooks";
 import {
   useAddComment,
   useDeleteComment,
@@ -33,7 +35,8 @@ import type { SortOrder, TaskComment, UserRole } from "@/types/models";
 // Mirrors commentValidator() in backend/src/validators/index.ts
 const MAX_COMMENT_CHARS = 5000;
 
-function validateComment(html: string) {
+function validateComment(html: string, uploading: number) {
+  if (uploading > 0) return "Wait for the images to finish uploading";
   if (isRichTextEmpty(html)) return "Write something first";
   if (richTextToPlainText(html).length > MAX_COMMENT_CHARS) {
     return `Comments can be at most ${MAX_COMMENT_CHARS.toLocaleString()} characters`;
@@ -176,22 +179,6 @@ export function TaskComments({ projectId, taskId, role }: TaskCommentsProps) {
   );
 }
 
-/** Project members matching an @query, by username or name */
-function useMentionItems(projectId: string) {
-  const members = useMemberOptions(projectId);
-  return (query: string): MentionItem[] => {
-    const term = query.toLowerCase();
-    return (members.data?.items ?? [])
-      .filter(
-        ({ user }) =>
-          user.username.toLowerCase().includes(term) ||
-          (user.fullName ?? "").toLowerCase().includes(term),
-      )
-      .slice(0, 6)
-      .map(({ user }) => ({ id: user._id, label: user.username, user }));
-  };
-}
-
 function CommentComposer({
   projectId,
   taskId,
@@ -200,6 +187,7 @@ function CommentComposer({
   taskId: string;
 }) {
   const mentionItems = useMentionItems(projectId);
+  const images = useImageUploads(projectId);
   const { data: currentUser } = useCurrentUser();
   const addComment = useAddComment(projectId, taskId);
   const [expanded, setExpanded] = useState(false);
@@ -216,7 +204,7 @@ function CommentComposer({
   };
 
   const submit = () => {
-    const problem = validateComment(body);
+    const problem = validateComment(body, images.uploading);
     if (problem) {
       setError(problem);
       return;
@@ -242,9 +230,10 @@ function CommentComposer({
                 setBody(html);
                 setError(null);
               }}
-              placeholder="Add a comment… Type @ to mention someone"
+              placeholder="Add a comment… Type @ to mention someone or paste an image"
               aria-label="New comment"
               mentionItems={mentionItems}
+              {...images.editorProps}
               autoFocus
               invalid={!!error}
               disabled={addComment.isPending}
@@ -256,10 +245,10 @@ function CommentComposer({
               <Button
                 size="sm"
                 onClick={submit}
-                disabled={addComment.isPending}
+                disabled={addComment.isPending || images.uploading > 0}
               >
-                {addComment.isPending && <Spinner />}
-                Save
+                {(addComment.isPending || images.uploading > 0) && <Spinner />}
+                {images.uploading > 0 ? "Uploading image…" : "Save"}
               </Button>
               <Button
                 size="sm"
@@ -305,12 +294,13 @@ function CommentItem({
 }) {
   const updateComment = useUpdateComment(projectId, taskId);
   const mentionItems = useMentionItems(projectId);
+  const images = useImageUploads(projectId);
   const [isEditing, setIsEditing] = useState(false);
   const [body, setBody] = useState(comment.body);
   const [error, setError] = useState<string | null>(null);
 
   const save = () => {
-    const problem = validateComment(body);
+    const problem = validateComment(body, images.uploading);
     if (problem) {
       setError(problem);
       return;
@@ -363,6 +353,7 @@ function CommentItem({
               }}
               aria-label="Edit comment"
               mentionItems={mentionItems}
+              {...images.editorProps}
               autoFocus
               invalid={!!error}
               disabled={updateComment.isPending}
@@ -374,10 +365,12 @@ function CommentItem({
               <Button
                 size="sm"
                 onClick={save}
-                disabled={updateComment.isPending}
+                disabled={updateComment.isPending || images.uploading > 0}
               >
-                {updateComment.isPending && <Spinner />}
-                Save
+                {(updateComment.isPending || images.uploading > 0) && (
+                  <Spinner />
+                )}
+                {images.uploading > 0 ? "Uploading image…" : "Save"}
               </Button>
               <Button
                 size="sm"

@@ -15,11 +15,13 @@ import {
   updateMemberRole,
   updateProject,
   updateProjectStatuses,
+  uploadImage,
 } from "../controllers/project.controllers.js";
 import {
   validateProjectPermission,
   verifyJWT,
 } from "../middlewares/auth.middleware.js";
+import { uploadRichTextImage } from "../middlewares/multer.middleware.js";
 import { inviteLimiter } from "../middlewares/rate-limit.middleware.js";
 import { broadcastProjectChange } from "../middlewares/realtime.middleware.js";
 import { validate } from "../middlewares/validator.middleware.js";
@@ -63,6 +65,15 @@ router
     projectChanged,
     broadcastProjectChange("tasks"),
     updateProjectStatuses,
+  );
+
+// Anyone who can comment can paste images into their comment
+router
+  .route("/:projectId/images")
+  .post(
+    validateProjectPermission(AvailableUserRole),
+    uploadRichTextImage,
+    uploadImage,
   );
 
 router

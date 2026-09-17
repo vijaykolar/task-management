@@ -23,10 +23,21 @@ const ALLOWED_TAGS = [
   "hr",
   "a",
   "span",
+  "img",
 ];
 
+/** Mirrors UPLOADED_IMAGE_PATTERN in backend/src/utils/rich-text.ts */
+const UPLOADED_IMAGE_PATTERN =
+  /^https?:\/\/[^\s"'<>]+\/images\/\d+-[0-9a-f]{16}\.(png|jpe?g|gif|webp)$/i;
+
+/** True for images uploaded to the API (the only ones rich text keeps) */
+export function isUploadedImageUrl(src: string) {
+  return UPLOADED_IMAGE_PATTERN.test(src);
+}
+
 export function sanitizeRichText(html: string) {
-  return DOMPurify.sanitize(html, {
+  const fragment = DOMPurify.sanitize(html, {
+    RETURN_DOM_FRAGMENT: true,
     ALLOWED_TAGS,
     ALLOWED_ATTR: [
       "href",
@@ -37,9 +48,18 @@ export function sanitizeRichText(html: string) {
       "data-type",
       "data-id",
       "data-label",
+      "src",
+      "alt",
     ],
     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i,
   });
+  // Only images uploaded to the API are kept, as on the server
+  for (const image of fragment.querySelectorAll("img")) {
+    if (!isUploadedImageUrl(image.getAttribute("src") ?? "")) image.remove();
+  }
+  const container = document.createElement("div");
+  container.append(fragment);
+  return container.innerHTML;
 }
 
 /** Visible text of an HTML string (block elements become line breaks) */
@@ -51,6 +71,7 @@ export function richTextToPlainText(html: string) {
   return (doc.body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/** No visible text and no images */
 export function isRichTextEmpty(html: string) {
-  return richTextToPlainText(html).length === 0;
+  return richTextToPlainText(html).length === 0 && !/<img\s/i.test(html);
 }

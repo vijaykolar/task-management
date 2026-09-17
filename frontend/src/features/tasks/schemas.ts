@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { formatBytes } from "@/lib/format";
+import { richTextToPlainText } from "@/lib/rich-text";
 import { parsePoints } from "@/lib/story-points";
 import { AvailableTaskTypes, TaskPriorities } from "@/types/models";
 
@@ -8,6 +9,8 @@ import { AvailableTaskTypes, TaskPriorities } from "@/types/models";
 export const MAX_FILES_PER_UPLOAD = 5;
 export const MAX_ATTACHMENTS_PER_TASK = 10;
 export const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+// Mirrors taskFieldValidators() in backend/src/validators/index.ts
+export const MAX_DESCRIPTION_CHARS = 5000;
 export const ACCEPTED_FILE_TYPES =
   "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf,text/plain,text/csv,text/markdown,application/zip,application/json,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
@@ -17,7 +20,13 @@ export const taskSchema = z.object({
     .trim()
     .min(1, "Title is required")
     .max(200, "Keep the title under 200 characters"),
-  description: z.string().trim().max(5000, "Keep it under 5000 characters"),
+  /** Rich text HTML, "" = none */
+  description: z
+    .string()
+    .refine(
+      (html) => richTextToPlainText(html).length <= MAX_DESCRIPTION_CHARS,
+      "Keep the description under 5,000 characters",
+    ),
   /** A status key from the project's workflow */
   status: z.string().min(1, "Choose a status"),
   type: z.enum(AvailableTaskTypes),
