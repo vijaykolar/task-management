@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useLogin, useResendEmailVerification } from "@/features/auth/hooks";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
+import { env } from "@/config/env";
 import { hasErrorCode } from "@/lib/axios";
 import { applyServerFieldErrors } from "@/lib/form-errors";
 import { displayName } from "@/lib/format";
@@ -33,7 +34,7 @@ export function LoginPage() {
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "" },
+    defaultValues: env.demoCredentials ?? { email: "", password: "" },
   });
 
   const onSubmit = form.handleSubmit((values) => {
@@ -54,6 +55,12 @@ export function LoginPage() {
         title="Welcome back"
         description="Sign in to your account to continue"
       />
+
+      {env.demoCredentials && (
+        <p className="mb-6 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-center text-sm text-muted-foreground">
+          Demo account filled in — just press <strong>Sign in</strong>.
+        </p>
+      )}
 
       <form onSubmit={onSubmit} noValidate>
         <FieldGroup>
