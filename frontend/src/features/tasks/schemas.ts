@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { formatBytes } from "@/lib/format";
+import { parsePoints } from "@/lib/story-points";
 import { TaskPriorities, TaskStatuses } from "@/types/models";
 
 // Mirrors backend/src/middlewares/multer.middleware.ts
@@ -33,6 +34,10 @@ export const taskSchema = z.object({
   /** `YYYY-MM-DD`, "" = no due date */
   dueDate: z.string(),
   labels: z.array(z.string()).max(10, "At most 10 labels"),
+  /** Typed estimate, "" = unestimated */
+  storyPoints: z.string().refine((value) => parsePoints(value) !== undefined, {
+    message: "Use a number from 0 to 1000 (one decimal at most)",
+  }),
   /** Sprint id, "" = backlog */
   sprint: z.string(),
 });

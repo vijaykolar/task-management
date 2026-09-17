@@ -67,6 +67,31 @@ export const parseDueDate = (value: unknown): Date | null | undefined => {
   return date;
 };
 
+export const MAX_STORY_POINTS = 1000;
+
+/**
+ * Parses the `storyPoints` body field. `undefined` = not provided, `null` =
+ * clear the estimate. Allows halves and other single-decimal values.
+ */
+export const parseStoryPoints = (value: unknown): number | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "" || value === "null") return null;
+
+  const points = typeof value === "number" ? value : Number(String(value));
+  if (
+    !Number.isFinite(points) ||
+    points < 0 ||
+    points > MAX_STORY_POINTS ||
+    Math.abs(Math.round(points * 10) - points * 10) > 1e-6
+  ) {
+    throw new ApiError(
+      422,
+      `Story points must be a number from 0 to ${MAX_STORY_POINTS} with at most one decimal`,
+    );
+  }
+  return Math.round(points * 10) / 10;
+};
+
 export const startOfTodayUtc = () => {
   const now = new Date();
   return new Date(

@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useTaskActivity } from "@/features/tasks/hooks";
 import { formatDueDate } from "@/lib/due-date";
 import { displayName, formatDate, formatRelative } from "@/lib/format";
+import { formatPoints } from "@/lib/story-points";
 import { taskPriorityMeta } from "@/lib/task-priority";
 import {
   AvailableTaskPriorities,
@@ -183,10 +184,37 @@ function describe(entry: TaskActivity): ReactNode {
     case "sprint_changed": {
       const fromName = personName(from);
       const toName = personName(to);
+      if (name === "created") {
+        return (
+          <>
+            added this to <Strong>{toName ?? "Backlog"}</Strong>
+          </>
+        );
+      }
       return (
         <>
           moved this from <Strong>{fromName ?? "Backlog"}</Strong> to{" "}
           <Strong>{toName ?? "Backlog"}</Strong>
+          {name === "sprint_completed" && " when the sprint was completed"}
+          {name === "sprint_deleted" && " when the sprint was deleted"}
+        </>
+      );
+    }
+    case "points_changed": {
+      const points = (value: unknown) =>
+        typeof value === "number" ? formatPoints(value) : null;
+      if (points(to) === null) return "removed the story point estimate";
+      if (points(from) === null) {
+        return (
+          <>
+            estimated this at <Strong>{points(to)}</Strong>
+          </>
+        );
+      }
+      return (
+        <>
+          changed story points from <Strong>{points(from)}</Strong> to{" "}
+          <Strong>{points(to)}</Strong>
         </>
       );
     }

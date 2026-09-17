@@ -17,10 +17,22 @@ export const TaskActivityTypeEnum = {
   SUBTASK_DELETED: "subtask_deleted",
   COMMENT_ADDED: "comment_added",
   SPRINT_CHANGED: "sprint_changed",
+  POINTS_CHANGED: "points_changed",
+  /** Kept after the task is gone so sprint reports stay accurate */
+  DELETED: "deleted",
 } as const;
 
 export type TaskActivityType =
   (typeof TaskActivityTypeEnum)[keyof typeof TaskActivityTypeEnum];
+
+/** Activity that sprint reports replay; survives task deletion */
+export const REPORT_ACTIVITY_TYPES: TaskActivityType[] = [
+  TaskActivityTypeEnum.CREATED,
+  TaskActivityTypeEnum.STATUS_CHANGED,
+  TaskActivityTypeEnum.SPRINT_CHANGED,
+  TaskActivityTypeEnum.POINTS_CHANGED,
+  TaskActivityTypeEnum.DELETED,
+];
 
 /**
  * One entry of a task's history ("A moved this from To do to Done").
@@ -62,6 +74,9 @@ const taskActivitySchema = new Schema<ITaskActivity>(
 );
 
 taskActivitySchema.index({ task: 1, createdAt: -1 });
+// Sprint reports: find every task that moved into or out of a sprint
+taskActivitySchema.index({ project: 1, type: 1, "to._id": 1 });
+taskActivitySchema.index({ project: 1, type: 1, "from._id": 1 });
 
 export const TaskActivity = mongoose.model<ITaskActivity>(
   "TaskActivity",

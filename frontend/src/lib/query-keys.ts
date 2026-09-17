@@ -44,6 +44,19 @@ export const queryKeys = {
       [...queryKeys.tasks.project(projectId), "comments", taskId] as const,
     commentPage: (projectId: string, taskId: string, params: object) =>
       [...queryKeys.tasks.comments(projectId, taskId), params] as const,
+    // Reports are derived from tasks, so every task or sprint change (which
+    // invalidates the project's tasks) refreshes them too
+    reports: (projectId: string) =>
+      [...queryKeys.tasks.project(projectId), "reports"] as const,
+    sprintReport: (projectId: string, sprintId: string, timeZone: string) =>
+      [
+        ...queryKeys.tasks.reports(projectId),
+        "sprint",
+        sprintId,
+        timeZone,
+      ] as const,
+    velocity: (projectId: string, limit: number) =>
+      [...queryKeys.tasks.reports(projectId), "velocity", limit] as const,
   },
   sprints: {
     all: ["sprints"] as const,

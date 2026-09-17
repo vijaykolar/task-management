@@ -3,6 +3,7 @@ import {
   CalendarClockIcon,
   ClockIcon,
   FlagIcon,
+  GaugeIcon,
   TagIcon,
   ZapIcon,
   HistoryIcon,
@@ -16,7 +17,7 @@ import {
   UserRoundPenIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { QueryError } from "@/components/common/query-error";
@@ -33,9 +34,11 @@ import {
   LabelsInput,
   PriorityIcon,
   PrioritySelect,
+  StoryPointsInput,
 } from "@/components/tasks/task-fields";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { dueDateKey } from "@/lib/due-date";
+import { formatPoints, parsePoints } from "@/lib/story-points";
 import { taskPriorityMeta } from "@/lib/task-priority";
 import {
   TaskStatusBadge,
@@ -126,6 +129,36 @@ function Section({
       </div>
       {children}
     </section>
+  );
+}
+
+/** Saves on blur or Enter; invalid input reverts to the saved value */
+function InlineStoryPoints({
+  value,
+  onSave,
+}: {
+  value?: number;
+  onSave: (points: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(value?.toString() ?? "");
+
+  const commit = () => {
+    const points = parsePoints(draft);
+    if (points === undefined) {
+      toast.error("Story points must be a number from 0 to 1000");
+      setDraft(value?.toString() ?? "");
+      return;
+    }
+    if (points !== (value ?? null)) onSave(points);
+  };
+
+  return (
+    <StoryPointsInput
+      value={draft}
+      onChange={setDraft}
+      onCommit={commit}
+      className="h-7 w-24"
+    />
   );
 }
 
@@ -301,6 +334,29 @@ function TaskDetailContent({
               dueDate={data.dueDate}
               done={data.status === "done"}
             />
+          ) : (
+            <span className="text-muted-foreground">None</span>
+          )}
+        </dd>
+
+        <dt className="flex items-center gap-2 text-muted-foreground">
+          <GaugeIcon className="size-4" />
+          Story points
+        </dt>
+        <dd className="min-w-0">
+          {canManage ? (
+            <InlineStoryPoints
+              // Reset the draft when the saved value changes
+              key={data.storyPoints ?? "none"}
+              value={data.storyPoints}
+              onSave={(storyPoints) =>
+                updateTask.mutate({ taskId, storyPoints: storyPoints ?? "" })
+              }
+            />
+          ) : data.storyPoints !== undefined ? (
+            <span className="tabular-nums">
+              {formatPoints(data.storyPoints)}
+            </span>
           ) : (
             <span className="text-muted-foreground">None</span>
           )}

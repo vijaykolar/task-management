@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -23,6 +24,7 @@ import {
   fromDateKey,
   toDateKey,
 } from "@/lib/due-date";
+import { formatPoints, MAX_STORY_POINTS } from "@/lib/story-points";
 import { taskPriorityMeta } from "@/lib/task-priority";
 import { cn } from "@/lib/utils";
 import {
@@ -88,6 +90,76 @@ export function PrioritySelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+// ---------- Story points ----------
+
+/** Compact estimate pill; renders nothing for unestimated tasks */
+export function PointsBadge({
+  points,
+  className,
+}: {
+  points?: number | null;
+  className?: string;
+}) {
+  if (points === undefined || points === null) return null;
+  return (
+    <Badge
+      variant="secondary"
+      className={cn(
+        "h-5 min-w-5 rounded-full px-1.5 font-normal tabular-nums",
+        className,
+      )}
+      title={`Story points: ${points}`}
+      aria-label={`${formatPoints(points)}`}
+    >
+      {points}
+    </Badge>
+  );
+}
+
+/** Numeric estimate input. `value` is the text typed, "" for none. */
+export function StoryPointsInput({
+  value,
+  onChange,
+  onCommit,
+  id,
+  className,
+  disabled,
+  invalid,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  /** Called on blur or Enter, for inline editing */
+  onCommit?: () => void;
+  id?: string;
+  className?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+}) {
+  return (
+    <Input
+      id={id}
+      type="number"
+      inputMode="decimal"
+      min={0}
+      max={MAX_STORY_POINTS}
+      step={0.5}
+      placeholder="None"
+      value={value}
+      disabled={disabled}
+      aria-invalid={invalid}
+      onChange={(event) => onChange(event.target.value)}
+      onBlur={onCommit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && onCommit) {
+          event.preventDefault();
+          onCommit();
+        }
+      }}
+      className={cn("tabular-nums", className)}
+    />
   );
 }
 

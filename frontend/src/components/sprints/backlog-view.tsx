@@ -21,6 +21,7 @@ import {
 import {
   DueDateBadge,
   LabelList,
+  PointsBadge,
   PriorityIcon,
 } from "@/components/tasks/task-fields";
 import { TaskStatusBadge } from "@/components/tasks/task-status-badge";
@@ -55,6 +56,7 @@ import {
 import { useSprintTasks, useUpdateTask } from "@/features/tasks/hooks";
 import { formatDueDate } from "@/lib/due-date";
 import { displayName } from "@/lib/format";
+import { formatPoints } from "@/lib/story-points";
 import { cn } from "@/lib/utils";
 import type { Sprint, TaskListItem } from "@/types/models";
 
@@ -160,6 +162,8 @@ export function BacklogView({
             <h3 className="font-medium">Backlog</h3>
             <span className="text-sm text-muted-foreground">
               {sprints.data?.backlog.taskCount ?? 0} tasks
+              {!!sprints.data?.backlog.pointCount &&
+                ` · ${formatPoints(sprints.data.backlog.pointCount)}`}
             </span>
           </div>
         }
@@ -327,6 +331,8 @@ function SprintHeader({
             <Progress value={percent} className="h-1.5" />
             <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
               {sprint.doneCount}/{sprint.taskCount} done
+              {sprint.pointCount > 0 &&
+                ` · ${sprint.donePoints}/${formatPoints(sprint.pointCount)}`}
             </span>
           </div>
         )}
@@ -534,6 +540,7 @@ function BacklogRow({
         done={task.status === "done"}
         className="hidden h-5 sm:inline-flex"
       />
+      <PointsBadge points={task.storyPoints} />
       <TaskStatusBadge status={task.status} className="hidden sm:inline-flex" />
       {task.assignedTo ? (
         <UserAvatar user={task.assignedTo} size="sm" />

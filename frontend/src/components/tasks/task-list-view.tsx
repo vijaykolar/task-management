@@ -170,6 +170,9 @@ export function TaskListView({
                 className="w-28"
                 {...headProps}
               />
+              <TableHead className="hidden w-16 text-right md:table-cell">
+                Points
+              </TableHead>
               <TableHead className="hidden w-32 lg:table-cell">
                 Sprint
               </TableHead>
@@ -188,7 +191,7 @@ export function TaskListView({
             {tasks.isPending &&
               Array.from({ length: 5 }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={8}>
+                  <TableCell colSpan={9}>
                     <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
@@ -256,6 +259,11 @@ export function TaskListView({
                       done={task.status === "done"}
                     />
                   ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="hidden text-right tabular-nums md:table-cell">
+                  {task.storyPoints ?? (
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>

@@ -1,4 +1,5 @@
 import mongoose, { Schema, type HydratedDocument, type Types } from "mongoose";
+import type { TaskStatus } from "../utils/constants.js";
 
 export const SprintStatusEnum = {
   PLANNED: "planned",
@@ -8,6 +9,31 @@ export const SprintStatusEnum = {
 
 export type SprintStatus =
   (typeof SprintStatusEnum)[keyof typeof SprintStatusEnum];
+
+export interface Tally {
+  count: number;
+  points: number;
+}
+
+/** A task as it was when the sprint started */
+export interface SprintSnapshotEntry {
+  task: Types.ObjectId;
+  status: TaskStatus;
+  storyPoints?: number;
+}
+
+/** Report totals frozen when the sprint is completed (used by velocity) */
+export interface SprintStats {
+  committed: Tally;
+  completed: Tally;
+  added: Tally;
+  removed: Tally;
+  carriedOver: Tally;
+  estimateDelta: number;
+  unestimated: number;
+  approximate: boolean;
+  computedAt: Date;
+}
 
 /** A time-boxed iteration. Tasks without a sprint are in the backlog. */
 export interface ISprint {
@@ -20,12 +46,20 @@ export interface ISprint {
   status: SprintStatus;
   startedAt?: Date;
   completedAt?: Date;
+  /** Missing for sprints started before reports existed */
+  startSnapshot?: SprintSnapshotEntry[];
+  stats?: SprintStats;
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export type SprintDocument = HydratedDocument<ISprint>;
+
+const tallySchema = new Schema<Tally>(
+  { count: { type: Number, default: 0 }, points: { type: Number, default: 0 } },
+  { _id: false },
+);
 
 const sprintSchema = new Schema<ISprint>(
   {
@@ -46,6 +80,36 @@ const sprintSchema = new Schema<ISprint>(
     },
     startedAt: Date,
     completedAt: Date,
+    startSnapshot: {
+      type: [
+        new Schema<SprintSnapshotEntry>(
+          {
+            task: { type: Schema.Types.ObjectId, ref: "Task", required: true },
+            status: { type: String, required: true },
+            storyPoints: Number,
+          },
+          { _id: false },
+        ),
+      ],
+      // No snapshot and an empty one mean different things
+      default: undefined,
+    },
+    stats: {
+      type: new Schema<SprintStats>(
+        {
+          committed: tallySchema,
+          completed: tallySchema,
+          added: tallySchema,
+          removed: tallySchema,
+          carriedOver: tallySchema,
+          estimateDelta: Number,
+          unestimated: Number,
+          approximate: Boolean,
+          computedAt: Date,
+        },
+        { _id: false },
+      ),
+    },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true },

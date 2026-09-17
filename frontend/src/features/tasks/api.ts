@@ -47,6 +47,8 @@ export interface TaskInput {
   /** `YYYY-MM-DD`; empty string clears the due date */
   dueDate?: string;
   labels?: string[];
+  /** "" clears the estimate */
+  storyPoints?: number | "";
   /** Sprint id; "" moves the task to the backlog */
   sprint?: string;
   /** New files to attach */
@@ -66,7 +68,10 @@ function toBody({ files, ...fields }: TaskInput) {
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
     // Arrays (labels) travel as JSON in multipart forms
-    form.append(key, Array.isArray(value) ? JSON.stringify(value) : value);
+    form.append(
+      key,
+      Array.isArray(value) ? JSON.stringify(value) : String(value),
+    );
   }
   for (const file of files) form.append("attachments", file);
   return form;

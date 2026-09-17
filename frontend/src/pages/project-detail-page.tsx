@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   CalendarIcon,
+  ChartLineIcon,
   CheckIcon,
   ClockIcon,
   CrownIcon,
@@ -24,6 +25,7 @@ import { NotesPanel } from "@/components/notes/notes-panel";
 import { DeleteProjectDialog } from "@/components/projects/delete-project-dialog";
 import { ProjectFormDialog } from "@/components/projects/project-form-dialog";
 import { ProjectSettings } from "@/components/projects/project-settings";
+import { ReportsPanel } from "@/components/reports/reports-panel";
 import { TasksPanel } from "@/components/tasks/tasks-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,7 +62,14 @@ import {
   type UserRole,
 } from "@/types/models";
 
-const TABS = ["overview", "tasks", "notes", "members", "settings"] as const;
+const TABS = [
+  "overview",
+  "tasks",
+  "reports",
+  "notes",
+  "members",
+  "settings",
+] as const;
 type Tab = (typeof TABS)[number];
 
 // What each role may do, per PRD.md §4.2
@@ -248,6 +257,10 @@ export function ProjectDetailPage() {
                   {summary.total}
                 </span>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="reports">
+              <ChartLineIcon />
+              Reports
             </TabsTrigger>
             <TabsTrigger value="notes">
               <NotebookPenIcon />
@@ -441,6 +454,10 @@ export function ProjectDetailPage() {
 
         <TabsContent value="tasks">
           <TasksPanel projectId={projectId} role={role} />
+        </TabsContent>
+
+        <TabsContent value="reports">
+          <ReportsPanel projectId={projectId} />
         </TabsContent>
 
         <TabsContent value="notes">

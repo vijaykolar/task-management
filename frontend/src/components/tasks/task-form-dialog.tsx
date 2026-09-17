@@ -10,6 +10,7 @@ import {
   DueDatePicker,
   LabelsInput,
   PrioritySelect,
+  StoryPointsInput,
 } from "@/components/tasks/task-fields";
 import { TaskStatusSelect } from "@/components/tasks/task-status-badge";
 import { SprintSelect } from "@/components/sprints/sprint-select";
@@ -55,6 +56,7 @@ export interface EditableTask {
   priority: TaskPriority;
   dueDate?: string;
   labels: string[];
+  storyPoints?: number;
   sprint?: string;
   assignedTo?: Pick<UserSummary, "_id">;
   attachmentCount: number;
@@ -113,6 +115,7 @@ function TaskForm({
       priority: task?.priority ?? "medium",
       dueDate: dueDateKey(task?.dueDate) ?? "",
       labels: task?.labels ?? [],
+      storyPoints: task?.storyPoints?.toString() ?? "",
       sprint: task?.sprint ?? defaultSprint ?? "",
     },
   });
@@ -120,8 +123,12 @@ function TaskForm({
   const existingCount = task?.attachmentCount ?? 0;
   const filesError = validateFiles(files, existingCount);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const onSubmit = form.handleSubmit(({ storyPoints: pointsText, ...rest }) => {
     if (filesError) return;
+    const values = {
+      ...rest,
+      storyPoints: pointsText.trim() ? Number(pointsText) : ("" as const),
+    };
     const onError = (error: unknown) =>
       applyServerFieldErrors(error, form.setError, [
         "title",
@@ -131,6 +138,7 @@ function TaskForm({
         "priority",
         "dueDate",
         "labels",
+        "storyPoints",
       ]);
 
     if (task) {
@@ -278,23 +286,43 @@ function TaskForm({
           />
         </div>
 
-        <Controller
-          control={form.control}
-          name="sprint"
-          render={({ field, fieldState }) => (
-            <Field data-invalid={fieldState.invalid}>
-              <FieldLabel htmlFor="task-sprint">Sprint</FieldLabel>
-              <SprintSelect
-                id="task-sprint"
-                projectId={projectId}
-                value={field.value}
-                onValueChange={field.onChange}
-                className="w-full"
-              />
-              <FieldError errors={[fieldState.error]} />
-            </Field>
-          )}
-        />
+        <div className="grid gap-5 sm:grid-cols-[1fr_9rem] sm:gap-3">
+          <Controller
+            control={form.control}
+            name="sprint"
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor="task-sprint">Sprint</FieldLabel>
+                <SprintSelect
+                  id="task-sprint"
+                  projectId={projectId}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  className="w-full"
+                />
+                <FieldError errors={[fieldState.error]} />
+              </Field>
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="storyPoints"
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor="task-story-points">
+                  Story points
+                </FieldLabel>
+                <StoryPointsInput
+                  id="task-story-points"
+                  value={field.value}
+                  onChange={field.onChange}
+                  invalid={fieldState.invalid}
+                />
+                <FieldError errors={[fieldState.error]} />
+              </Field>
+            )}
+          />
+        </div>
 
         <Controller
           control={form.control}

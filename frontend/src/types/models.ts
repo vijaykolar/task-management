@@ -171,6 +171,8 @@ export interface TaskListItem {
   /** ISO date at 12:00 UTC; the calendar day is `dueDate.slice(0, 10)` */
   dueDate?: string;
   labels: string[];
+  /** Missing = unestimated */
+  storyPoints?: number;
   /** Sprint id; missing = backlog */
   sprint?: string;
   assignedTo?: UserSummary;
@@ -216,6 +218,7 @@ export interface TaskDetail {
   priority: TaskPriority;
   dueDate?: string;
   labels: string[];
+  storyPoints?: number;
   sprint?: string;
   assignedTo?: UserSummary;
   assignedBy?: UserSummary;
@@ -271,7 +274,9 @@ export type TaskActivityType =
   | "subtask_reopened"
   | "subtask_deleted"
   | "comment_added"
-  | "sprint_changed";
+  | "sprint_changed"
+  | "points_changed"
+  | "deleted";
 
 export interface TaskActivity {
   _id: string;
@@ -322,13 +327,96 @@ export interface Sprint {
   completedAt?: string;
   taskCount: number;
   doneCount: number;
+  pointCount: number;
+  donePoints: number;
   createdAt: string;
 }
 
 export interface SprintsResponse {
   sprints: Sprint[];
-  backlog: { taskCount: number; doneCount: number };
+  backlog: {
+    taskCount: number;
+    doneCount: number;
+    pointCount: number;
+    donePoints: number;
+  };
 }
+
+// ---------- Reports ----------
+
+export interface Tally {
+  count: number;
+  points: number;
+}
+
+export interface ReportTask {
+  _id: string;
+  title: string;
+  status: TaskStatus;
+  storyPoints: number | null;
+  deleted: boolean;
+  addedAt?: string;
+  removedAt?: string;
+  doneAtStart?: boolean;
+}
+
+/** GET /reports/:projectId/sprints/:sprintId */
+export interface SprintReport {
+  sprint: Pick<
+    Sprint,
+    | "_id"
+    | "name"
+    | "goal"
+    | "status"
+    | "startDate"
+    | "endDate"
+    | "startedAt"
+    | "completedAt"
+  >;
+  /** Rebuilt from history for sprints started before reports existed */
+  approximate: boolean;
+  timeZone: string;
+  summary: {
+    committed: Tally;
+    completed: Tally;
+    added: Tally;
+    removed: Tally;
+    carriedOver: Tally;
+    /** Point changes to committed tasks during the sprint */
+    estimateDelta: number;
+    unestimated: number;
+  };
+  /** First point is "start", then one per calendar day; future days are null */
+  series: {
+    date: string;
+    scope: Tally | null;
+    done: Tally | null;
+    remaining: Tally | null;
+  }[];
+  tasks: {
+    completed: ReportTask[];
+    carriedOver: ReportTask[];
+    added: ReportTask[];
+    removed: ReportTask[];
+  };
+}
+
+/** GET /reports/:projectId/velocity */
+export interface VelocityReport {
+  sprints: {
+    _id: string;
+    name: string;
+    startDate?: string;
+    endDate?: string;
+    completedAt?: string;
+    committed: Tally;
+    completed: Tally;
+    approximate: boolean;
+  }[];
+  average: Tally;
+}
+
+export type ReportUnit = keyof Tally;
 
 // ---------- My work ----------
 

@@ -1,10 +1,15 @@
-import { body, type ValidationChain } from "express-validator";
+import { body, query, type ValidationChain } from "express-validator";
+import { isValidTimeZone } from "../utils/sprint-report.js";
 import {
   AvailableTaskPriorities,
   AvailableTaskStatues,
   AvailableUserRole,
 } from "../utils/constants.js";
-import { parseDueDate, parseLabels } from "../utils/task-fields.js";
+import {
+  parseDueDate,
+  parseLabels,
+  parseStoryPoints,
+} from "../utils/task-fields.js";
 import { prepareRichText } from "../utils/rich-text.js";
 
 export const PASSWORD_MIN_LENGTH = 8;
@@ -183,6 +188,13 @@ const taskFieldValidators = (isCreate: boolean): ValidationChain[] => {
         parseLabels(value);
         return true;
       }),
+    // An empty value clears the estimate
+    body("storyPoints")
+      .optional()
+      .custom((value) => {
+        parseStoryPoints(value);
+        return true;
+      }),
     // "" or "backlog" removes the task from its sprint
     body("sprint")
       .optional({ values: "falsy" })
@@ -276,7 +288,22 @@ const sprintValidator = (): ValidationChain[] => {
   ];
 };
 
+const reportQueryValidator = (): ValidationChain[] => {
+  return [
+    query("tz")
+      .optional()
+      .custom(isValidTimeZone)
+      .withMessage("Time zone is invalid"),
+    query("limit")
+      .optional()
+      .isInt({ min: 1, max: 20 })
+      .withMessage("Limit must be between 1 and 20")
+      .toInt(),
+  ];
+};
+
 export {
+  reportQueryValidator,
   sprintValidator,
   commentValidator,
   transferOwnershipValidator,

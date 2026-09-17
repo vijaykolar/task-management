@@ -32,6 +32,7 @@ import {
 import {
   DueDateBadge,
   LabelList,
+  PointsBadge,
   PriorityIcon,
 } from "@/components/tasks/task-fields";
 import { useTaskColumn, type TaskFilters } from "@/features/tasks/hooks";
@@ -401,7 +402,8 @@ function TaskCard({
           <span title="Last updated">{formatRelative(task.updatedAt)}</span>
         )}
 
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-2">
+          <PointsBadge points={task.storyPoints} />
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="relative z-10 flex">

@@ -1,11 +1,15 @@
 import { Sprint, SprintStatusEnum } from "../models/sprint.models.js";
+import { TaskActivityTypeEnum } from "../models/taskactivity.models.js";
 import { Task } from "../models/task.models.js";
+import { logActivities } from "../utils/activity.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import { TaskStatusEnum } from "../utils/constants.js";
 import { toObjectId } from "../utils/object-id.js";
 import { requireUser } from "../utils/request-user.js";
+import { buildSprintReport, toSprintStats } from "../utils/sprint-report.js";
+import { findSprintInProject } from "../utils/sprints.js";
 import { parseDueDate, startOfTodayUtc } from "../utils/task-fields.js";
 
 type ProjectParams = { projectId: string };
@@ -14,16 +18,11 @@ type SprintParams = ProjectParams & { sprintId: string };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SPRINT_DAYS = 14;
 
-const findSprintInProject = async (projectId: string, sprintId: string) => {
-  const sprint = await Sprint.findOne({
-    _id: toObjectId(sprintId, "sprint id"),
-    project: toObjectId(projectId, "project id"),
-  });
-  if (!sprint) {
-    throw new ApiError(404, "Sprint not found");
-  }
-  return sprint;
-};
+const sumPoints = (input: string) => ({
+  $sum: {
+    $map: { input, in: { $ifNull: ["$$this.storyPoints", 0] } },
+  },
+});
 
 const assertDateOrder = (start?: Date | null, end?: Date | null) => {
   if (start && end && end < start) {
@@ -47,20 +46,25 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
           localField: "_id",
           foreignField: "sprint",
           as: "tasks",
-          pipeline: [{ $project: { status: 1 } }],
+          pipeline: [{ $project: { status: 1, storyPoints: 1 } }],
+        },
+      },
+      {
+        $addFields: {
+          doneTasks: {
+            $filter: {
+              input: "$tasks",
+              cond: { $eq: ["$$this.status", TaskStatusEnum.DONE] },
+            },
+          },
         },
       },
       {
         $addFields: {
           taskCount: { $size: "$tasks" },
-          doneCount: {
-            $size: {
-              $filter: {
-                input: "$tasks",
-                cond: { $eq: ["$$this.status", TaskStatusEnum.DONE] },
-              },
-            },
-          },
+          doneCount: { $size: "$doneTasks" },
+          pointCount: sumPoints("$tasks"),
+          donePoints: sumPoints("$doneTasks"),
           statusRank: {
             $indexOfArray: [
               [
@@ -75,7 +79,16 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
         },
       },
       { $sort: { statusRank: 1, startDate: 1, createdAt: 1 } },
-      { $project: { tasks: 0, statusRank: 0, completedSort: 0 } },
+      {
+        $project: {
+          tasks: 0,
+          doneTasks: 0,
+          statusRank: 0,
+          completedSort: 0,
+          startSnapshot: 0,
+          stats: 0,
+        },
+      },
     ]),
     Task.aggregate([
       { $match: { project: projectId, sprint: { $exists: false } } },
@@ -88,21 +101,37 @@ const getSprints = asyncHandler<ProjectParams>(async (req, res) => {
               $cond: [{ $eq: ["$status", TaskStatusEnum.DONE] }, 1, 0],
             },
           },
+          pointCount: { $sum: { $ifNull: ["$storyPoints", 0] } },
+          donePoints: {
+            $sum: {
+              $cond: [
+                { $eq: ["$status", TaskStatusEnum.DONE] },
+                { $ifNull: ["$storyPoints", 0] },
+                0,
+              ],
+            },
+          },
         },
       },
       { $project: { _id: 0 } },
     ]),
   ]);
 
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { sprints, backlog: backlog[0] ?? { taskCount: 0, doneCount: 0 } },
-        "Sprints fetched",
-      ),
-    );
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        sprints,
+        backlog: backlog[0] ?? {
+          taskCount: 0,
+          doneCount: 0,
+          pointCount: 0,
+          donePoints: 0,
+        },
+      },
+      "Sprints fetched",
+    ),
+  );
 });
 
 const createSprint = asyncHandler<ProjectParams>(async (req, res) => {
@@ -151,14 +180,27 @@ const updateSprint = asyncHandler<SprintParams>(async (req, res) => {
 
 /** Deleting a sprint sends its tasks back to the backlog */
 const deleteSprint = asyncHandler<SprintParams>(async (req, res) => {
+  const currentUser = requireUser(req);
   const sprint = await findSprintInProject(
     req.params.projectId,
     req.params.sprintId,
   );
 
+  const tasks = await Task.find({ sprint: sprint._id }, "_id").lean();
   const moved = await Task.updateMany(
-    { sprint: sprint._id },
+    { _id: { $in: tasks.map((task) => task._id) }, sprint: sprint._id },
     { $unset: { sprint: 1 } },
+  );
+  await logActivities(
+    sprint.project,
+    currentUser._id,
+    tasks.map((task) => ({
+      task: task._id,
+      type: TaskActivityTypeEnum.SPRINT_CHANGED,
+      from: { _id: sprint._id, name: sprint.name },
+      to: null,
+      name: "sprint_deleted",
+    })),
   );
   await sprint.deleteOne();
 
@@ -204,6 +246,16 @@ const startSprint = asyncHandler<SprintParams>(async (req, res) => {
 
   sprint.status = SprintStatusEnum.ACTIVE;
   sprint.startedAt = new Date();
+  // What the team committed to, for sprint reports
+  const committed = await Task.find(
+    { sprint: sprint._id },
+    "_id status storyPoints",
+  ).lean();
+  sprint.startSnapshot = committed.map((task) => ({
+    task: task._id,
+    status: task.status,
+    storyPoints: task.storyPoints,
+  }));
   await sprint.save();
 
   return res.status(200).json(new ApiResponse(200, sprint, "Sprint started"));
@@ -214,6 +266,7 @@ const startSprint = asyncHandler<SprintParams>(async (req, res) => {
  * Unfinished tasks move to the backlog or to another sprint.
  */
 const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
+  const currentUser = requireUser(req);
   const sprint = await findSprintInProject(
     req.params.projectId,
     req.params.sprintId,
@@ -223,12 +276,13 @@ const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
     throw new ApiError(400, "Only the active sprint can be completed");
   }
 
-  const target: unknown = req.body.moveOpenTo;
+  const moveOpenTo: unknown = req.body.moveOpenTo;
   let targetSprintId = undefined;
-  if (target && target !== "backlog") {
+  let target: { _id: unknown; name: string } | null = null;
+  if (moveOpenTo && moveOpenTo !== "backlog") {
     const next = await findSprintInProject(
       req.params.projectId,
-      String(target),
+      String(moveOpenTo),
     );
     if (
       next.status !== SprintStatusEnum.PLANNED ||
@@ -237,25 +291,43 @@ const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
       throw new ApiError(400, "Open tasks can only move to a planned sprint");
     }
     targetSprintId = next._id;
+    target = { _id: next._id, name: next.name };
   }
 
-  const openFilter = {
-    sprint: sprint._id,
-    status: { $ne: TaskStatusEnum.DONE },
-  };
-  const [doneCount, moved] = await Promise.all([
+  // Freeze the report while unfinished tasks still belong to this sprint.
+  // Moves below are logged at or after `completedAt`, so reports ignore them.
+  const completedAt = new Date();
+  const report = await buildSprintReport(sprint, { asOf: completedAt });
+  const [doneCount, openTasks] = await Promise.all([
     Task.countDocuments({ sprint: sprint._id, status: TaskStatusEnum.DONE }),
-    Task.updateMany(
-      openFilter,
-      targetSprintId
-        ? { $set: { sprint: targetSprintId } }
-        : { $unset: { sprint: 1 } },
-    ),
+    Task.find(
+      { sprint: sprint._id, status: { $ne: TaskStatusEnum.DONE } },
+      "_id",
+    ).lean(),
   ]);
 
   sprint.status = SprintStatusEnum.COMPLETED;
-  sprint.completedAt = new Date();
+  sprint.completedAt = completedAt;
+  sprint.stats = toSprintStats(report);
   await sprint.save();
+
+  const moved = await Task.updateMany(
+    { _id: { $in: openTasks.map((task) => task._id) }, sprint: sprint._id },
+    targetSprintId
+      ? { $set: { sprint: targetSprintId } }
+      : { $unset: { sprint: 1 } },
+  );
+  await logActivities(
+    sprint.project,
+    currentUser._id,
+    openTasks.map((task) => ({
+      task: task._id,
+      type: TaskActivityTypeEnum.SPRINT_CHANGED,
+      from: { _id: sprint._id, name: sprint.name },
+      to: target,
+      name: "sprint_completed",
+    })),
+  );
 
   return res
     .status(200)

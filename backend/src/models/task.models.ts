@@ -30,6 +30,8 @@ export interface ITask {
   /** Stored at 12:00 UTC so the calendar day is the same in every timezone */
   dueDate?: Date;
   labels: string[];
+  /** Estimate; missing = unestimated */
+  storyPoints?: number;
   /** Missing = backlog */
   sprint?: Types.ObjectId;
   attachments: ITaskAttachment[];
@@ -77,6 +79,7 @@ const taskSchema = new Schema<ITask>(
       default: [],
       index: true,
     },
+    storyPoints: { type: Number, min: 0, max: 1000 },
     sprint: {
       type: Schema.Types.ObjectId,
       ref: "Sprint",

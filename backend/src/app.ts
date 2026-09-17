@@ -54,6 +54,7 @@ import taskRouter from "./routes/task.routes.js";
 import noteRouter from "./routes/note.routes.js";
 import notificationRouter from "./routes/notification.routes.js";
 import sprintRouter from "./routes/sprint.routes.js";
+import reportRouter from "./routes/report.routes.js";
 import searchRouter from "./routes/search.routes.js";
 import eventsRouter from "./routes/events.routes.js";
 
@@ -64,6 +65,7 @@ app.use("/api/v1/tasks", taskRouter);
 app.use("/api/v1/notes", noteRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/sprints", sprintRouter);
+app.use("/api/v1/reports", reportRouter);
 app.use("/api/v1/search", searchRouter);
 app.use("/api/v1/events", eventsRouter);
 

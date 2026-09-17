@@ -6,6 +6,7 @@ import { Project } from "../models/project.models.js";
 import { ProjectMember } from "../models/projectmember.models.js";
 import { Subtask } from "../models/subtask.models.js";
 import {
+  REPORT_ACTIVITY_TYPES,
   TaskActivity,
   TaskActivityTypeEnum,
 } from "../models/taskactivity.models.js";
@@ -40,10 +41,12 @@ import {
 import type { AuthenticatedUser } from "../types/auth.js";
 import { requireUser } from "../utils/request-user.js";
 import { extractMentionIds, prepareRichText } from "../utils/rich-text.js";
+import { sprintSnapshot } from "../utils/sprints.js";
 import {
   dueDateKey,
   parseDueDate,
   parseLabels,
+  parseStoryPoints,
   startOfTodayUtc,
 } from "../utils/task-fields.js";
 
@@ -128,13 +131,6 @@ const resolveSprint = async (
     throw new ApiError(400, "Tasks can't be added to a completed sprint");
   }
   return sprint._id;
-};
-
-/** `{ _id, name }` snapshot of a sprint for activity history (null = backlog) */
-const sprintSnapshot = async (sprintId: Types.ObjectId | undefined | null) => {
-  if (!sprintId) return null;
-  const sprint = await Sprint.findById(sprintId, "name").lean();
-  return sprint ? { _id: sprint._id, name: sprint.name } : null;
 };
 
 const findTaskInProject = async (projectId: string, taskId: string) => {
@@ -438,14 +434,25 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
       priority,
       dueDate: parseDueDate(req.body.dueDate) ?? undefined,
       labels: parseLabels(req.body.labels) ?? [],
+      storyPoints: parseStoryPoints(req.body.storyPoints) ?? undefined,
       sprint: await resolveSprint(projectId, req.body.sprint),
       assignedBy: currentUser._id,
       attachments: files.map((file) => toAttachment(req, file)),
     });
 
-    await logActivity(task, currentUser._id, [
+    const history: ActivityEntry[] = [
       { type: TaskActivityTypeEnum.CREATED, to: task.status },
-    ]);
+    ];
+    // Sprint reports need to know the task was in the sprint from the start
+    if (task.sprint) {
+      history.push({
+        type: TaskActivityTypeEnum.SPRINT_CHANGED,
+        from: null,
+        to: await sprintSnapshot(task.sprint),
+        name: "created",
+      });
+    }
+    await logActivity(task, currentUser._id, history);
     await notifyAssignee(currentUser, task, assignee);
 
     return res
@@ -574,6 +581,19 @@ const updateTask = asyncHandler<TaskParams>(async (req, res) => {
       task.dueDate = dueDate ?? undefined;
     }
 
+    const storyPoints = parseStoryPoints(req.body.storyPoints);
+    if (
+      storyPoints !== undefined &&
+      storyPoints !== (task.storyPoints ?? null)
+    ) {
+      history.push({
+        type: TaskActivityTypeEnum.POINTS_CHANGED,
+        from: task.storyPoints ?? null,
+        to: storyPoints,
+      });
+      task.storyPoints = storyPoints ?? undefined;
+    }
+
     const labels = parseLabels(req.body.labels);
     const currentLabels = task.labels ?? [];
     if (
@@ -617,13 +637,32 @@ const updateTask = asyncHandler<TaskParams>(async (req, res) => {
 });
 
 const deleteTask = asyncHandler<TaskParams>(async (req, res) => {
+  const currentUser = requireUser(req);
   const task = await findTaskInProject(req.params.projectId, req.params.taskId);
+
+  // Sprint reports still count the task, so keep its report history and
+  // record what it looked like when it was deleted
+  await logActivity(task, currentUser._id, [
+    {
+      type: TaskActivityTypeEnum.DELETED,
+      name: task.title,
+      from: {
+        title: task.title,
+        status: task.status,
+        storyPoints: task.storyPoints ?? null,
+        sprint: await sprintSnapshot(task.sprint),
+      },
+    },
+  ]);
 
   await Promise.all([
     task.deleteOne(),
     Subtask.deleteMany({ task: task._id }),
     TaskComment.deleteMany({ task: task._id }),
-    TaskActivity.deleteMany({ task: task._id }),
+    TaskActivity.deleteMany({
+      task: task._id,
+      type: { $nin: REPORT_ACTIVITY_TYPES },
+    }),
   ]);
   await removeFiles(task.attachments.map((file) => file.localPath));
 

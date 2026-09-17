@@ -34,3 +34,19 @@ export const logActivity = async (
     console.error("Failed to record task activity:", error);
   }
 };
+
+/** Like `logActivity`, for entries across many tasks in one insert */
+export const logActivities = async (
+  project: Types.ObjectId,
+  actor: Types.ObjectId,
+  entries: (ActivityEntry & { task: Types.ObjectId })[],
+) => {
+  if (entries.length === 0) return;
+  try {
+    await TaskActivity.insertMany(
+      entries.map((entry) => ({ ...entry, project, actor })),
+    );
+  } catch (error) {
+    console.error("Failed to record task activity:", error);
+  }
+};
