@@ -140,6 +140,22 @@ function describe(entry: TaskActivity, projectId: string): ReactNode {
         </>
       );
     }
+    case "start_date_changed":
+      if (!to) return "removed the start date";
+      if (!from) {
+        return (
+          <>
+            set the start date to <Strong>{formatDueDate(String(to))}</Strong>
+          </>
+        );
+      }
+      return (
+        <>
+          moved the start date from{" "}
+          <Strong>{formatDueDate(String(from))}</Strong> to{" "}
+          <Strong>{formatDueDate(String(to))}</Strong>
+        </>
+      );
     case "due_date_changed":
       if (!to) return "removed the due date";
       if (!from) {

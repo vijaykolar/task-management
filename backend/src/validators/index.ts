@@ -217,6 +217,12 @@ const taskFieldValidators = (isCreate: boolean): ValidationChain[] => {
         parseDueDate(value);
         return true;
       }),
+    body("startDate")
+      .optional()
+      .custom((value) => {
+        parseDueDate(value);
+        return true;
+      }),
     body("labels")
       .optional()
       .custom((value) => {

@@ -225,6 +225,8 @@ export interface TaskListItem {
   priority: TaskPriority;
   /** ISO date at 12:00 UTC; the calendar day is `dueDate.slice(0, 10)` */
   dueDate?: string;
+  /** When the work should start; drawn on the roadmap */
+  startDate?: string;
   labels: string[];
   /** Missing = unestimated */
   storyPoints?: number;
@@ -279,6 +281,7 @@ export interface TaskDetail {
   statusCategory: StatusCategory;
   priority: TaskPriority;
   dueDate?: string;
+  startDate?: string;
   labels: string[];
   storyPoints?: number;
   sprint?: string;
@@ -335,6 +338,7 @@ export type TaskActivityType =
   | "priority_changed"
   | "assignee_changed"
   | "due_date_changed"
+  | "start_date_changed"
   | "labels_changed"
   | "attachment_added"
   | "attachment_removed"
@@ -372,7 +376,9 @@ export type NotificationType =
   | "task_status_changed"
   | "task_linked"
   | "task_due_soon"
-  | "task_overdue";
+  | "task_overdue"
+  // Sent by an automation rule
+  | "automation";
 
 export interface AppNotification {
   _id: string;
@@ -640,4 +646,139 @@ export interface SavedFilter {
 export interface BulkResult {
   updated: number;
   failed: { taskId: string; key?: string; message: string }[];
+}
+
+// ---------- Automation ----------
+
+export type AutomationEvent =
+  | "task_created"
+  | "task_changed"
+  | "sprint_started"
+  | "sprint_completed"
+  | "schedule";
+
+export type AutomationField =
+  "status" | "assignee" | "priority" | "sprint" | "dueDate" | "labels" | "type";
+
+export type AutomationConditionField =
+  | "type"
+  | "status"
+  | "statusCategory"
+  | "priority"
+  | "assignee"
+  | "labels"
+  | "sprint"
+  | "storyPoints"
+  | "epic"
+  | "dueDate";
+
+export type AutomationOperator =
+  | "is"
+  | "is_not"
+  | "contains"
+  | "not_contains"
+  | "is_empty"
+  | "is_not_empty"
+  | "gt"
+  | "lt";
+
+export type AutomationActionType =
+  | "set_status"
+  | "set_assignee"
+  | "set_priority"
+  | "set_sprint"
+  | "set_due_date"
+  | "add_labels"
+  | "remove_labels"
+  | "add_comment"
+  | "notify"
+  | "create_task";
+
+export interface AutomationTrigger {
+  event: AutomationEvent;
+  field?: AutomationField;
+  to?: string;
+  from?: string;
+  frequency?: "daily" | "weekly";
+  weekday?: number;
+  hour?: number;
+  timeZone?: string;
+}
+
+export interface AutomationCondition {
+  field: AutomationConditionField;
+  op: AutomationOperator;
+  value?: string;
+}
+
+export interface AutomationAction {
+  type: AutomationActionType;
+  value?: string;
+  days?: number;
+  labels?: string[];
+  text?: string;
+  taskType?: TaskType;
+}
+
+export interface AutomationRule {
+  _id: string;
+  project: string;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  createdBy: string;
+  lastRunAt?: string;
+  runCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationRun {
+  _id: string;
+  rule: string;
+  ruleName: string;
+  task?: string;
+  taskKey?: string;
+  taskTitle?: string;
+  status: "applied" | "skipped" | "failed";
+  details: string[];
+  error?: string;
+  createdAt: string;
+}
+
+// ---------- Roadmap ----------
+
+/** A task as the timeline needs it: dates, state, and who owns it */
+export interface RoadmapTask {
+  _id: string;
+  key: string;
+  title: string;
+  type: TaskType;
+  status: TaskStatus;
+  statusCategory: StatusCategory;
+  priority: TaskPriority;
+  assignedTo?: string;
+  /** `YYYY-MM-DD...` ISO strings, stored at noon UTC */
+  startDate?: string;
+  dueDate?: string;
+  storyPoints?: number;
+  epic?: string;
+  sprint?: string;
+  rank: number;
+}
+
+export interface RoadmapEpic extends RoadmapTask {
+  children: RoadmapTask[];
+  /** The span of the children, drawn when the epic has no dates of its own */
+  derivedStart: string | null;
+  derivedEnd: string | null;
+  doneCount: number;
+}
+
+export interface Roadmap {
+  epics: RoadmapEpic[];
+  /** Dated work that belongs to no epic */
+  loose: RoadmapTask[];
 }

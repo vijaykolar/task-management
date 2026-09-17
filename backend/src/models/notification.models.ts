@@ -9,6 +9,8 @@ export const NotificationTypeEnum = {
   TASK_LINKED: "task_linked",
   TASK_DUE_SOON: "task_due_soon",
   TASK_OVERDUE: "task_overdue",
+  /** Sent by an automation rule */
+  AUTOMATION: "automation",
 } as const;
 
 export type NotificationType =

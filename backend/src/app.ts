@@ -49,6 +49,7 @@ app.use(
 
 import healthCheckRouter from "./routes/healthcheck.routes.js";
 import authRouter from "./routes/auth.routes.js";
+import automationRouter from "./routes/automation.routes.js";
 import projectRouter from "./routes/project.routes.js";
 import taskRouter from "./routes/task.routes.js";
 import noteRouter from "./routes/note.routes.js";
@@ -65,6 +66,7 @@ app.use("/api/v1/tasks", taskRouter);
 app.use("/api/v1/notes", noteRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/sprints", sprintRouter);
+app.use("/api/v1/automations", automationRouter);
 app.use("/api/v1/reports", reportRouter);
 app.use("/api/v1/search", searchRouter);
 app.use("/api/v1/events", eventsRouter);

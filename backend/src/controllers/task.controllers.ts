@@ -22,6 +22,11 @@ import {
 } from "../utils/activity.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
+import {
+  fieldChanges,
+  runTaskAutomations,
+  type AutomationActor,
+} from "../utils/automation.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
   getUploadedFiles,
@@ -88,6 +93,8 @@ type FacetStages = NonNullable<PipelineStage.Facet["$facet"][string]>;
 const USER_SUMMARY = { _id: 1, username: 1, fullName: 1, avatar: 1 } as const;
 const AUTHOR_FIELDS = "_id username fullName avatar";
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** A roadmap stays readable long before this, but the query stays bounded */
+const ROADMAP_TASK_LIMIT = 1000;
 
 const isTaskPriority = (value: unknown): value is TaskPriority =>
   AvailableTaskPriorities.includes(value as TaskPriority);
@@ -643,6 +650,7 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
       statusCategory: status.category,
       priority,
       dueDate: parseDueDate(req.body.dueDate) ?? undefined,
+      startDate: parseDueDate(req.body.startDate) ?? undefined,
       labels: parseLabels(req.body.labels) ?? [],
       storyPoints: parseStoryPoints(req.body.storyPoints) ?? undefined,
       sprint,
@@ -681,6 +689,12 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
     await logActivity(task, currentUser._id, history);
     await notifyAssignee(currentUser, task, assignee);
     await notifyDescriptionMentions(currentUser, task, task.description ?? "");
+    await runTaskAutomations({
+      event: "task_created",
+      task,
+      project,
+      actor: currentUser as AutomationActor,
+    });
 
     return res
       .status(201)
@@ -689,6 +703,84 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
     await removeFiles(files.map((file) => file.path));
     throw error;
   }
+});
+
+/** Fields the roadmap draws with; it never needs descriptions or attachments */
+const ROADMAP_FIELDS =
+  "key title type status statusCategory priority assignedTo startDate dueDate storyPoints epic sprint rank";
+
+/** Widest range covered by a set of tasks, for an epic with no dates of its own */
+const spanOf = (tasks: { startDate?: Date; dueDate?: Date }[]) => {
+  let start: Date | undefined;
+  let end: Date | undefined;
+  for (const task of tasks) {
+    const from = task.startDate ?? task.dueDate;
+    const to = task.dueDate ?? task.startDate;
+    if (from && (!start || from < start)) start = from;
+    if (to && (!end || to > end)) end = to;
+  }
+  return { start, end };
+};
+
+/**
+ * GET /tasks/:projectId/roadmap — epics with the work under them, for the
+ * timeline. An epic without dates borrows the span of its children, so a
+ * roadmap is worth looking at before anyone fills the dates in by hand.
+ */
+const getRoadmap = asyncHandler<ProjectParams>(async (req, res) => {
+  const projectId = toObjectId(req.params.projectId, "project id");
+  const tasks = await Task.find(
+    {
+      project: projectId,
+      // Everything that could earn a row: epics, their children, dated work
+      $or: [
+        { type: TaskTypeEnum.EPIC },
+        { epic: { $ne: null } },
+        { startDate: { $ne: null } },
+        { dueDate: { $ne: null } },
+      ],
+    },
+    ROADMAP_FIELDS,
+  )
+    .sort({ rank: 1 })
+    .limit(ROADMAP_TASK_LIMIT)
+    .lean();
+
+  const children = new Map<string, typeof tasks>();
+  for (const task of tasks) {
+    if (task.type === TaskTypeEnum.EPIC || !task.epic) continue;
+    const key = String(task.epic);
+    children.set(key, [...(children.get(key) ?? []), task]);
+  }
+
+  const epics = tasks
+    .filter((task) => task.type === TaskTypeEnum.EPIC)
+    .map((epic) => {
+      const own = children.get(String(epic._id)) ?? [];
+      const span = spanOf(own);
+      return {
+        ...epic,
+        children: own,
+        // What to draw when the epic has no dates of its own
+        derivedStart: span.start ?? null,
+        derivedEnd: span.end ?? null,
+        doneCount: own.filter(
+          (child) => child.statusCategory === StatusCategoryEnum.DONE,
+        ).length,
+      };
+    });
+
+  // Dated work that belongs to no epic still deserves a lane
+  const loose = tasks.filter(
+    (task) =>
+      task.type !== TaskTypeEnum.EPIC &&
+      !task.epic &&
+      (task.startDate || task.dueDate),
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { epics, loose }, "Roadmap"));
 });
 
 const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
@@ -788,6 +880,8 @@ const getTaskByKey = asyncHandler<{ taskKey: string }>(async (req, res) => {
 
 interface TaskChanges {
   history: ActivityEntry[];
+  /** The fields automation watches, as they were before the edit */
+  before: Record<string, unknown>;
   newAssignee?: Types.ObjectId;
   /** The description before this change, to find new @mentions */
   previousDescription?: string;
@@ -807,7 +901,11 @@ const applyTaskChanges = async (
   project: WorkflowProject,
 ): Promise<TaskChanges> => {
   const history: ActivityEntry[] = [];
-  const changes: TaskChanges = { history, demotedEpic: false };
+  const changes: TaskChanges = {
+    history,
+    demotedEpic: false,
+    before: automationSnapshot(task),
+  };
   const { title, description, priority } = body;
 
   if (typeof title === "string" && title !== task.title) {
@@ -933,6 +1031,19 @@ const applyTaskChanges = async (
       to: dueDateKey(dueDate),
     });
     task.dueDate = dueDate ?? undefined;
+  }
+
+  const startDate = parseDueDate(body.startDate);
+  if (
+    startDate !== undefined &&
+    dueDateKey(startDate) !== dueDateKey(task.startDate)
+  ) {
+    history.push({
+      type: TaskActivityTypeEnum.START_DATE_CHANGED,
+      from: dueDateKey(task.startDate),
+      to: dueDateKey(startDate),
+    });
+    task.startDate = startDate ?? undefined;
   }
 
   const storyPoints = parseStoryPoints(body.storyPoints);
@@ -1084,6 +1195,17 @@ const setWatching = (watching: boolean) =>
 const watchTask = setWatching(true);
 const unwatchTask = setWatching(false);
 
+/** The fields automation rules can trigger on, before an edit is applied */
+const automationSnapshot = (task: TaskDocument) => ({
+  status: task.status,
+  assignedTo: task.assignedTo,
+  priority: task.priority,
+  sprint: task.sprint,
+  type: task.type,
+  dueDate: task.dueDate,
+  labels: [...task.labels],
+});
+
 /** Saves applied changes and records their history and notifications */
 const saveTaskChanges = async (
   task: TaskDocument,
@@ -1114,6 +1236,15 @@ const saveTaskChanges = async (
     );
   }
   if (changes.demotedEpic) await releaseEpicChildren(task, actor._id);
+
+  // Last, so rules see the finished task; it never throws
+  await runTaskAutomations({
+    event: "task_changed",
+    task,
+    project: task.project,
+    actor: actor as AutomationActor,
+    changes: fieldChanges(changes.before, task),
+  });
 };
 
 const updateTask = asyncHandler<TaskParams>(async (req, res) => {
@@ -2024,6 +2155,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
 });
 
 export {
+  getRoadmap,
   watchTask,
   unwatchTask,
   rankTask,

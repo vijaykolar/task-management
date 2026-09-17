@@ -10,6 +10,10 @@ import { logActivities } from "../utils/activity.js";
 import { ApiError } from "../utils/api-error.js";
 import { ApiResponse } from "../utils/api-response.js";
 import { asyncHandler } from "../utils/async-handler.js";
+import {
+  runSprintAutomations,
+  type AutomationActor,
+} from "../utils/automation.js";
 import { StatusCategoryEnum } from "../utils/constants.js";
 import { toObjectId } from "../utils/object-id.js";
 import { requireUser } from "../utils/request-user.js";
@@ -284,6 +288,14 @@ const startSprint = asyncHandler<SprintParams>(async (req, res) => {
   }));
   await sprint.save();
 
+  await runSprintAutomations({
+    event: "sprint_started",
+    sprint: { _id: sprint._id, name: sprint.name },
+    taskIds: committed.map((task) => task._id),
+    project: sprint.project,
+    actor: requireUser(req) as AutomationActor,
+  });
+
   return res.status(200).json(new ApiResponse(200, sprint, "Sprint started"));
 });
 
@@ -335,6 +347,10 @@ const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
     ).lean(),
   ]);
 
+  const sprintTaskIds = (
+    await Task.find({ sprint: sprint._id }, "_id").lean()
+  ).map((task) => task._id);
+
   sprint.status = SprintStatusEnum.COMPLETED;
   sprint.completedAt = completedAt;
   sprint.stats = toSprintStats(report);
@@ -357,6 +373,14 @@ const completeSprint = asyncHandler<SprintParams>(async (req, res) => {
       name: "sprint_completed",
     })),
   );
+
+  await runSprintAutomations({
+    event: "sprint_completed",
+    sprint: { _id: sprint._id, name: sprint.name },
+    taskIds: sprintTaskIds,
+    project: sprint.project,
+    actor: currentUser as AutomationActor,
+  });
 
   return res
     .status(200)

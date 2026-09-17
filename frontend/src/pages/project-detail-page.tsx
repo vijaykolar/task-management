@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   CalendarIcon,
   ChartLineIcon,
+  MapIcon,
   CheckIcon,
   ClockIcon,
   CrownIcon,
@@ -48,6 +49,8 @@ import {
 } from "@/components/ui/empty";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AutomationsPanel } from "@/components/automations/automations-panel";
+import { RoadmapView } from "@/components/roadmap/roadmap-view";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProject, useProjectMembers } from "@/features/projects/hooks";
 import { useTaskSummary } from "@/features/tasks/hooks";
@@ -66,6 +69,7 @@ import {
 const TABS = [
   "overview",
   "tasks",
+  "roadmap",
   "reports",
   "notes",
   "members",
@@ -258,6 +262,10 @@ export function ProjectDetailPage() {
                   {summary.total}
                 </span>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="roadmap">
+              <MapIcon />
+              Roadmap
             </TabsTrigger>
             <TabsTrigger value="reports">
               <ChartLineIcon />
@@ -466,6 +474,16 @@ export function ProjectDetailPage() {
           <TasksPanel projectId={projectId} role={role} />
         </TabsContent>
 
+        <TabsContent value="roadmap">
+          <RoadmapView
+            projectId={projectId}
+            canManage={can(role, "task:manage")}
+            onOpenTask={(taskId) =>
+              setSearchParams({ tab: "tasks", task: taskId })
+            }
+          />
+        </TabsContent>
+
         <TabsContent value="reports">
           <ReportsPanel projectId={projectId} />
         </TabsContent>
@@ -478,12 +496,13 @@ export function ProjectDetailPage() {
           <MembersPanel projectId={projectId} role={role} />
         </TabsContent>
 
-        <TabsContent value="settings">
+        <TabsContent value="settings" className="space-y-4">
           <ProjectSettings
             project={data}
             onEdit={() => setEditOpen(true)}
             onDelete={() => setDeleteOpen(true)}
           />
+          <AutomationsPanel projectId={projectId} role={role} />
         </TabsContent>
       </Tabs>
 

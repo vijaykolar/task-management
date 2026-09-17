@@ -7,6 +7,7 @@ import {
   MessageSquareIcon,
   RefreshCwIcon,
   UserPlusIcon,
+  WandSparklesIcon,
 } from "lucide-react";
 import { Link } from "react-router";
 
@@ -37,6 +38,10 @@ const typeMeta: Record<
     className: "bg-amber-500 text-white",
   },
   task_overdue: { icon: AlarmClockIcon, className: "bg-red-500 text-white" },
+  automation: {
+    icon: WandSparklesIcon,
+    className: "bg-indigo-500 text-white",
+  },
 };
 
 interface NotificationItemProps {

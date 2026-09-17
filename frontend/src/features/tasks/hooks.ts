@@ -462,6 +462,15 @@ export function useMyTasks(params: MyTaskParams) {
 // ---------- Epics, links & pickers ----------
 
 /** Every epic in the project, for pickers and filters */
+/** Epics with their children, for the roadmap timeline */
+export function useRoadmap(projectId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.tasks.roadmap(projectId ?? ""),
+    queryFn: () => tasksApi.roadmap(projectId!).then((res) => res.data),
+    enabled: !!projectId,
+  });
+}
+
 export function useEpics(projectId: string) {
   return useQuery({
     queryKey: queryKeys.tasks.epics(projectId),

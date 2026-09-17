@@ -8,6 +8,7 @@ export const TaskActivityTypeEnum = {
   PRIORITY_CHANGED: "priority_changed",
   ASSIGNEE_CHANGED: "assignee_changed",
   DUE_DATE_CHANGED: "due_date_changed",
+  START_DATE_CHANGED: "start_date_changed",
   LABELS_CHANGED: "labels_changed",
   ATTACHMENT_ADDED: "attachment_added",
   ATTACHMENT_REMOVED: "attachment_removed",

@@ -46,6 +46,8 @@ export const queryKeys = {
       [...queryKeys.tasks.project(projectId), "links", taskId] as const,
     epics: (projectId: string) =>
       [...queryKeys.tasks.project(projectId), "epics"] as const,
+    roadmap: (projectId: string) =>
+      [...queryKeys.tasks.project(projectId), "roadmap"] as const,
     picker: (projectId: string, search: string) =>
       [...queryKeys.tasks.project(projectId), "picker", search] as const,
     // Personal, so not nested under the project's tasks (they refetch often)
@@ -72,6 +74,15 @@ export const queryKeys = {
     all: ["sprints"] as const,
     project: (projectId: string) =>
       [...queryKeys.sprints.all, projectId] as const,
+  },
+  automations: {
+    all: ["automations"] as const,
+    project: (projectId: string) =>
+      [...queryKeys.automations.all, projectId] as const,
+    rules: (projectId: string) =>
+      [...queryKeys.automations.project(projectId), "rules"] as const,
+    runs: (projectId: string, ruleId: string) =>
+      [...queryKeys.automations.project(projectId), "runs", ruleId] as const,
   },
   myWork: {
     all: ["my-work"] as const,

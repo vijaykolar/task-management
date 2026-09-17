@@ -1,6 +1,7 @@
 import {
   BanIcon,
   CalendarClockIcon,
+  CalendarRangeIcon,
   CalendarIcon,
   ClockIcon,
   FlagIcon,
@@ -635,6 +636,23 @@ function TaskDetailContent({
                 <span className="tabular-nums">
                   {formatPoints(data.storyPoints)}
                 </span>
+              ) : (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </FieldRow>
+
+            <FieldRow icon={CalendarRangeIcon} label="Start date">
+              {canManage ? (
+                <DueDatePicker
+                  size="sm"
+                  className="w-full"
+                  value={dueDateKey(data.startDate) ?? ""}
+                  onChange={(startDate) =>
+                    updateTask.mutate({ taskId, startDate })
+                  }
+                />
+              ) : data.startDate ? (
+                <span>{formatDate(data.startDate)}</span>
               ) : (
                 <span className="text-muted-foreground">None</span>
               )}

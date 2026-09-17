@@ -42,6 +42,8 @@ export const taskSchema = z.object({
   ]),
   /** `YYYY-MM-DD`, "" = no due date */
   dueDate: z.string(),
+  /** `YYYY-MM-DD`, "" = no start date; the roadmap draws the two as a bar */
+  startDate: z.string(),
   labels: z.array(z.string()).max(10, "At most 10 labels"),
   /** Typed estimate, "" = unestimated */
   storyPoints: z.string().refine((value) => parsePoints(value) !== undefined, {

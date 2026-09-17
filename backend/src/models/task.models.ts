@@ -50,6 +50,8 @@ export interface ITask {
   priority: TaskPriority;
   /** Stored at 12:00 UTC so the calendar day is the same in every timezone */
   dueDate?: Date;
+  /** When the work is meant to begin; gives the roadmap a bar to draw */
+  startDate?: Date;
   labels: string[];
   /** Estimate; missing = unestimated */
   storyPoints?: number;
@@ -112,6 +114,7 @@ const taskSchema = new Schema<ITask>(
       default: TaskPriorityEnum.MEDIUM,
     },
     dueDate: Date,
+    startDate: Date,
     labels: {
       type: [String],
       default: [],
@@ -162,5 +165,7 @@ taskSchema.index({ project: 1, number: 1 }, { unique: true });
 taskSchema.index({ project: 1, sprint: 1, rank: 1 });
 // Due date reminders
 taskSchema.index({ dueDate: 1, statusCategory: 1 });
+// The roadmap reads a project's epics and dated work
+taskSchema.index({ project: 1, type: 1, startDate: 1 });
 
 export const Task = mongoose.model<ITask>("Task", taskSchema);

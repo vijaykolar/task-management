@@ -8,6 +8,7 @@ import type {
   TaskLinkType,
   TaskType,
   Paginated,
+  Roadmap,
   SortOrder,
   TaskActivity,
   TaskComment,
@@ -62,6 +63,8 @@ export interface TaskInput {
   priority?: TaskPriority;
   /** `YYYY-MM-DD`; empty string clears the due date */
   dueDate?: string;
+  /** `YYYY-MM-DD`; empty string clears the start date */
+  startDate?: string;
   labels?: string[];
   /** "" clears the estimate */
   storyPoints?: number | "";
@@ -181,6 +184,9 @@ export const tasksApi = {
     http.post<{ _id: string }>(`/tasks/${projectId}`, toBody(input), {
       timeout: 60_000,
     }),
+
+  roadmap: (projectId: string) =>
+    http.get<Roadmap>(`/tasks/${projectId}/roadmap`),
 
   update: (projectId: string, taskId: string, input: TaskInput) =>
     http.put<{ _id: string }>(

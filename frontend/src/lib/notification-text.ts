@@ -15,6 +15,7 @@ const phrases: Record<
   task_linked: { verb: "linked" },
   task_due_soon: { suffix: "is due today", system: true },
   task_overdue: { suffix: "is overdue", system: true },
+  automation: { suffix: "was updated by a rule", system: true },
 };
 
 export interface NotificationParts {

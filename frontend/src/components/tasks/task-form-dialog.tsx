@@ -64,6 +64,7 @@ export interface EditableTask {
   epic?: TaskRef;
   priority: TaskPriority;
   dueDate?: string;
+  startDate?: string;
   labels: string[];
   storyPoints?: number;
   sprint?: string;
@@ -145,6 +146,7 @@ function TaskForm({
       assignedTo: task?.assignedTo?._id ?? "",
       priority: task?.priority ?? "medium",
       dueDate: dueDateKey(task?.dueDate) ?? "",
+      startDate: dueDateKey(task?.startDate) ?? "",
       labels: task?.labels ?? [],
       storyPoints: task?.storyPoints?.toString() ?? "",
       sprint: task?.sprint ?? defaultSprint ?? "",
@@ -175,6 +177,7 @@ function TaskForm({
         "assignedTo",
         "priority",
         "dueDate",
+        "startDate",
         "labels",
         "storyPoints",
       ]);
@@ -347,6 +350,21 @@ function TaskForm({
                   value={field.value}
                   onValueChange={field.onChange}
                   className="w-full"
+                />
+                <FieldError errors={[fieldState.error]} />
+              </Field>
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="startDate"
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor="task-start-date">Start date</FieldLabel>
+                <DueDatePicker
+                  id="task-start-date"
+                  value={field.value}
+                  onChange={field.onChange}
                 />
                 <FieldError errors={[fieldState.error]} />
               </Field>

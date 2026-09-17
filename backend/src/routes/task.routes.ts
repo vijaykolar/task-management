@@ -12,6 +12,7 @@ import {
   getTaskLinks,
   saveFilter,
   getMyTasks,
+  getRoadmap,
   addTaskComment,
   deleteTaskComment,
   getTaskComments,
@@ -71,6 +72,10 @@ router
     validate,
     createTask,
   );
+
+router
+  .route("/:projectId/roadmap")
+  .get(validateProjectPermission(AvailableUserRole), getRoadmap);
 
 router
   .route("/:projectId/bulk")
