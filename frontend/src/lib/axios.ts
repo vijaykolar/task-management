@@ -11,7 +11,8 @@ export const api = axios.create({
   baseURL: env.apiBaseUrl,
   // Backend sets accessToken / refreshToken as cookies
   withCredentials: true,
-  timeout: 15_000,
+  // Generous: free hosting tiers sleep and can take ~50s to wake up
+  timeout: 60_000,
 });
 
 // ---------- Error normalization ----------
@@ -59,8 +60,8 @@ export function toApiClientError(error: unknown): ApiClientError {
     if (!error.response) {
       return new ApiClientError(
         error.code === AxiosError.ECONNABORTED
-          ? "Request timed out"
-          : "Network error. Please check your connection.",
+          ? "The server took too long to respond. If it has been idle it may still be waking up — try again."
+          : "Couldn't reach the server. Check your connection and try again.",
         0,
       );
     }

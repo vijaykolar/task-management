@@ -1,40 +1,22 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 
 import { FullPageLoader } from "@/components/common/full-page-loader";
-import { QueryError } from "@/components/common/query-error";
 import { useCurrentUser } from "@/features/auth/hooks";
 
 export interface RedirectState {
   from?: string;
 }
 
-/** Renders child routes only for logged-in users */
+/**
+ * Renders child routes only for logged-in users. Anything other than a
+ * confirmed session sends you to the login page: not signed in, an expired
+ * session, or an unreachable API (the login form reports the problem there).
+ */
 export function RequireAuth() {
   const location = useLocation();
-  const {
-    data: user,
-    isPending,
-    error,
-    refetch,
-    isRefetching,
-  } = useCurrentUser();
+  const { data: user, isPending } = useCurrentUser();
 
   if (isPending) return <FullPageLoader />;
-
-  if (error) {
-    return (
-      <div className="flex min-h-svh items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          <QueryError
-            title="Can't reach the server"
-            error={error}
-            onRetry={() => refetch()}
-            isRetrying={isRefetching}
-          />
-        </div>
-      </div>
-    );
-  }
 
   if (!user) {
     const state: RedirectState = {
