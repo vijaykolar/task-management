@@ -19,6 +19,10 @@ export const authCookieOptions = (): CookieOptions => {
     // Browsers require Secure for SameSite=None; localhost counts as secure
     secure: policy === "none" || process.env.COOKIE_SECURE !== "false",
     sameSite: policy,
+    // Cross-site cookies are third-party cookies, which Safari, Brave and
+    // Chrome increasingly block. CHIPS keys the cookie to the frontend's site
+    // instead, so it survives that blocking. Ignored by older browsers.
+    ...(policy === "none" ? { partitioned: true } : {}),
     path: "/",
   };
 };

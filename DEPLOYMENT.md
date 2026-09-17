@@ -119,6 +119,35 @@ links such as `/projects/:id` and caches hashed assets.
 
 ---
 
+## Troubleshooting: signed in, then bounced back to /login
+
+Login succeeds, but every request after it is a 401, so the app drops the
+session. The auth cookie is being set and then not sent back. In DevTools →
+Network, open the login request → Response Headers → `Set-Cookie`, then open
+any request after it → Request Headers → is there a `Cookie`?
+
+1. The cookie must say `SameSite=None; Secure; Partitioned`. If it says
+   `SameSite=Lax`, `COOKIE_SAME_SITE=none` is missing from Render — add it and
+   redeploy. A `Lax` cookie is stored but never sent from another site.
+2. If it looks right and the `Cookie` header is still missing, the browser is
+   blocking third-party cookies (Safari, Brave, Chrome incognito). The app
+   sends `Partitioned` (CHIPS) for this, which recent browsers honour; older
+   ones don't. To remove the problem entirely, serve the API from the frontend's
+   own origin by adding a rewrite **above** the SPA rewrite in
+   `frontend/vercel.json`:
+
+   ```json
+   { "source": "/api/:path*", "destination": "https://<your-api>.onrender.com/api/:path*" }
+   ```
+
+   then set `VITE_API_BASE_URL=/api/v1` and `COOKIE_SAME_SITE=lax`. The cookie
+   is now first-party and nothing can block it. Check that real-time updates
+   still arrive, since the SSE stream is proxied too.
+3. `TRUST_PROXY=1` must be set, or Express sees Render's proxy as the
+   connection and refuses to send `Secure` cookies.
+
+---
+
 ## Free-tier limits
 
 - **The API sleeps** after ~15 minutes of inactivity. The next request takes
