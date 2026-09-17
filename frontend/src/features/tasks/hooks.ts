@@ -121,6 +121,7 @@ export function useTask(projectId: string, taskId: string | null) {
             assignedBy: undefined,
             attachments: [],
             subtasks: [],
+            watchers: [],
             childCount: 0,
             doneChildCount: 0,
           }
@@ -364,6 +365,28 @@ export function useSprintTasks(projectId: string, sprint: string) {
     initialPageParam: 1,
     getNextPageParam: (last) =>
       last.pagination.hasNextPage ? last.pagination.page + 1 : undefined,
+  });
+}
+
+/** Start or stop watching a task; the task's watcher list updates in place */
+export function useWatchTask(projectId: string, taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (watching: boolean) =>
+      tasksApi.watch(projectId, taskId, watching).then((res) => res.data),
+    meta: { silent: true },
+    onSuccess: (watchers, watching) => {
+      queryClient.setQueryData<TaskDetail>(
+        queryKeys.tasks.detail(projectId, taskId),
+        (detail) => (detail ? { ...detail, watchers } : detail),
+      );
+      toast.success(
+        watching
+          ? "Watching: you'll be notified about changes"
+          : "You stopped watching this task",
+      );
+    },
+    onError: (error) => toast.error(error.message),
   });
 }
 

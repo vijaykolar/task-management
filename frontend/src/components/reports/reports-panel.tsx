@@ -1,8 +1,15 @@
-import { ChartLineIcon, InfoIcon } from "lucide-react";
+import {
+  BadgeCheckIcon,
+  ChartLineIcon,
+  InfoIcon,
+  PencilIcon,
+} from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 
 import { QueryError } from "@/components/common/query-error";
+import { CorrectReportDialog } from "@/components/reports/correct-report-dialog";
+import { Button } from "@/components/ui/button";
 import {
   BurndownChart,
   BurnupChart,
@@ -39,7 +46,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSprintReport, useVelocity } from "@/features/reports/hooks";
+import { useProjectRole } from "@/features/projects/hooks";
 import { useSprints } from "@/features/sprints/hooks";
+import { formatDate } from "@/lib/format";
+import { can } from "@/lib/permissions";
 import { formatDueDate } from "@/lib/due-date";
 import type { ReportUnit, Sprint } from "@/types/models";
 
@@ -76,6 +86,9 @@ export function ReportsPanel({ projectId }: { projectId: string }) {
 
   const report = useSprintReport(projectId, sprintId);
   const velocity = useVelocity(projectId, velocityRange);
+  const { role } = useProjectRole(projectId);
+  const canCorrect = can(role, "task:manage");
+  const [correcting, setCorrecting] = useState(false);
 
   const unitParam = searchParams.get("unit");
   // Default to points once the team estimates, otherwise count tasks
@@ -201,14 +214,52 @@ export function ReportsPanel({ projectId }: { projectId: string }) {
         </p>
       )}
 
-      {data?.approximate && (
-        <div className="flex gap-2 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-          <InfoIcon className="mt-0.5 size-4 shrink-0" />
-          <p>
-            This sprint started before sprint reports were tracked, so its
-            numbers are rebuilt from task history and may be incomplete.
+      {data?.correction?.source === "rebuilt" && (
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm sm:flex-row sm:items-center">
+          <InfoIcon className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="flex-1 text-muted-foreground">
+            This sprint started before reports were tracked, so its numbers were
+            rebuilt from task history. Tasks moved out when it was completed may
+            be missing.
+            {!canCorrect && " A project admin can review and confirm it."}
           </p>
+          {canCorrect && (
+            <Button size="sm" onClick={() => setCorrecting(true)}>
+              <PencilIcon />
+              Review and correct
+            </Button>
+          )}
         </div>
+      )}
+      {data?.correction?.source === "confirmed" && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <BadgeCheckIcon className="size-4 text-emerald-600 dark:text-emerald-400" />
+          <span>
+            Reviewed and confirmed
+            {data.correction.confirmedAt &&
+              ` on ${formatDate(data.correction.confirmedAt)}`}
+          </span>
+          {canCorrect && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setCorrecting(true)}
+            >
+              <PencilIcon />
+              Edit
+            </Button>
+          )}
+        </div>
+      )}
+      {data?.correction && (
+        <CorrectReportDialog
+          // Start from the latest lists each time it opens
+          key={`${data.sprint._id}-${data.correction.confirmedAt ?? "rebuilt"}`}
+          projectId={projectId}
+          report={data}
+          open={correcting}
+          onOpenChange={setCorrecting}
+        />
       )}
 
       {report.isError ? (
@@ -314,7 +365,7 @@ export function ReportsPanel({ projectId }: { projectId: string }) {
                 </span>{" "}
                 per sprint
                 {velocity.data.sprints.some((s) => s.approximate) &&
-                  " · some older sprints are approximate"}
+                  " · some older sprints are unconfirmed estimates"}
               </p>
             </div>
           )}

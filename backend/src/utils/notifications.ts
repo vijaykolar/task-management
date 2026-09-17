@@ -17,9 +17,10 @@ import { publishToUsers } from "./realtime.js";
 interface NotifyOptions {
   type: NotificationType;
   recipients: (Types.ObjectId | string | undefined | null)[];
-  actor: { _id: Types.ObjectId; username: string; fullName?: string };
+  /** Omit for reminders the app sends on its own */
+  actor?: { _id: Types.ObjectId; username: string; fullName?: string };
   project: { _id: Types.ObjectId; name: string };
-  task?: { _id: Types.ObjectId; title: string };
+  task?: { _id: Types.ObjectId; title: string; key?: string };
   excerpt?: string;
 }
 
@@ -28,7 +29,8 @@ const EXCERPT_LENGTH = 160;
 const displayName = (user: { username: string; fullName?: string }) =>
   user.fullName?.trim() || user.username;
 
-// Comments are frequent; only assignments and mentions are worth an email
+// Only assignments and mentions are worth an email; everything else (comments,
+// watched-task updates, due reminders) stays in the app
 const EMAIL_TYPES: NotificationType[] = [
   NotificationTypeEnum.TASK_ASSIGNED,
   NotificationTypeEnum.MENTIONED,
@@ -45,7 +47,7 @@ export const taskUrl = (projectId: Types.ObjectId, taskId: Types.ObjectId) =>
  */
 export const notify = async (options: NotifyOptions): Promise<string[]> => {
   try {
-    const actorId = String(options.actor._id);
+    const actorId = options.actor ? String(options.actor._id) : null;
     const candidateIds = [
       ...new Set(
         options.recipients
@@ -70,12 +72,13 @@ export const notify = async (options: NotifyOptions): Promise<string[]> => {
     await Notification.insertMany(
       recipientIds.map((recipient) => ({
         recipient,
-        actor: options.actor._id,
+        actor: options.actor?._id,
         type: options.type,
         project: options.project._id,
         task: options.task?._id,
         projectName: options.project.name,
         taskTitle: options.task?.title,
+        taskKey: options.task?.key,
         excerpt,
       })),
     );
@@ -83,14 +86,16 @@ export const notify = async (options: NotifyOptions): Promise<string[]> => {
     publishToUsers(recipientIds, {
       type: "notification",
       kind: options.type,
-      actorName: displayName(options.actor),
+      actorName: options.actor ? displayName(options.actor) : undefined,
       projectId: String(options.project._id),
       projectName: options.project.name,
       taskId: options.task ? String(options.task._id) : undefined,
       taskTitle: options.task?.title,
+      taskKey: options.task?.key,
+      excerpt,
     });
 
-    if (EMAIL_TYPES.includes(options.type) && options.task) {
+    if (EMAIL_TYPES.includes(options.type) && options.task && options.actor) {
       void sendNotificationEmails(options, recipientIds, excerpt);
     }
     return recipientIds;
@@ -115,7 +120,7 @@ const sendNotificationEmails = async (
   ).lean();
 
   const details = {
-    actorName: displayName(options.actor),
+    actorName: displayName(options.actor!),
     projectName: options.project.name,
     taskTitle: options.task!.title,
     taskUrl: taskUrl(options.project._id, options.task!._id),

@@ -1,5 +1,7 @@
 import { Router } from "express";
 import {
+  watchTask,
+  unwatchTask,
   rankTask,
   addTaskLink,
   bulkUpdateTasks,
@@ -94,6 +96,12 @@ router
 router
   .route("/:projectId/filters/:filterId")
   .delete(validateProjectPermission(AvailableUserRole), deleteSavedFilter);
+
+// Watching is personal: no broadcast needed
+router
+  .route("/:projectId/t/:taskId/watch")
+  .put(validateProjectPermission(AvailableUserRole), watchTask)
+  .delete(validateProjectPermission(AvailableUserRole), unwatchTask);
 
 router
   .route("/:projectId/t/:taskId/rank")

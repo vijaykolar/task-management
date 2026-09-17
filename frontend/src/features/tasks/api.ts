@@ -17,6 +17,7 @@ import type {
   TaskDetail,
   TasksResponse,
   TaskStatus,
+  UserSummary,
 } from "@/types/models";
 
 export type TaskSort =
@@ -135,6 +136,11 @@ export const tasksApi = {
     http.get<{ _id: string; key: string; project: string }>(
       `/tasks/key/${encodeURIComponent(key)}`,
     ),
+
+  watch: (projectId: string, taskId: string, watching: boolean) =>
+    watching
+      ? http.put<UserSummary[]>(`/tasks/${projectId}/t/${taskId}/watch`)
+      : http.delete<UserSummary[]>(`/tasks/${projectId}/t/${taskId}/watch`),
 
   rank: (projectId: string, taskId: string, input: RankInput) =>
     http.put<{ _id: string; rank: number; sprint: string | null }>(

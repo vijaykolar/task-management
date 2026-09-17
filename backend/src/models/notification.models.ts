@@ -4,6 +4,11 @@ export const NotificationTypeEnum = {
   TASK_ASSIGNED: "task_assigned",
   TASK_COMMENTED: "task_commented",
   MENTIONED: "mentioned",
+  // For people watching a task
+  TASK_STATUS_CHANGED: "task_status_changed",
+  TASK_LINKED: "task_linked",
+  TASK_DUE_SOON: "task_due_soon",
+  TASK_OVERDUE: "task_overdue",
 } as const;
 
 export type NotificationType =
@@ -11,14 +16,17 @@ export type NotificationType =
 
 export interface INotification {
   recipient: Types.ObjectId;
-  actor: Types.ObjectId;
+  /** Missing for reminders the app sends on its own (due dates) */
+  actor?: Types.ObjectId;
   type: NotificationType;
   project: Types.ObjectId;
   task?: Types.ObjectId;
   /** Snapshot for display, so it still reads well if the task is renamed */
   projectName: string;
   taskTitle?: string;
-  /** Short plain-text excerpt of a comment */
+  /** Ticket key snapshot, e.g. SPST-12 */
+  taskKey?: string;
+  /** Short plain-text excerpt: a comment, or what changed */
   excerpt?: string;
   readAt?: Date;
   createdAt: Date;
@@ -31,7 +39,7 @@ const NOTIFICATION_TTL_DAYS = 90;
 const notificationSchema = new Schema<INotification>(
   {
     recipient: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    actor: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    actor: { type: Schema.Types.ObjectId, ref: "User" },
     type: {
       type: String,
       enum: Object.values(NotificationTypeEnum),
@@ -41,6 +49,7 @@ const notificationSchema = new Schema<INotification>(
     task: { type: Schema.Types.ObjectId, ref: "Task" },
     projectName: { type: String, required: true },
     taskTitle: String,
+    taskKey: String,
     excerpt: String,
     readAt: Date,
   },

@@ -9,15 +9,10 @@ import {
   type RealtimeEvent,
 } from "@/features/realtime/realtime";
 import { http } from "@/lib/axios";
+import { notificationSentence } from "@/lib/notification-text";
 import { queryKeys } from "@/lib/query-keys";
 
 const MAX_BACKOFF_MS = 30_000;
-
-const notificationVerb = {
-  task_assigned: "assigned you to",
-  task_commented: "commented on",
-  mentioned: "mentioned you in",
-} as const;
 
 function invalidateForProjectEvent(
   queryClient: QueryClient,
@@ -117,9 +112,16 @@ export function useRealtimeConnection(userId: string | undefined) {
           ? `/projects/${event.projectId}?tab=tasks&task=${event.taskId}`
           : `/projects/${event.projectId}`;
         toast(
-          `${event.actorName} ${notificationVerb[event.kind]} ${event.taskTitle ?? "a task"}`,
+          notificationSentence({
+            type: event.kind,
+            actorName: event.actorName,
+            taskKey: event.taskKey,
+            taskTitle: event.taskTitle,
+          }),
           {
-            description: event.projectName,
+            description: event.excerpt
+              ? `${event.excerpt} · ${event.projectName}`
+              : event.projectName,
             action: { label: "View", onClick: () => navigateRef.current(href) },
           },
         );

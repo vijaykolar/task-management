@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  correctSprintReport,
   completeSprint,
   createSprint,
   deleteSprint,
@@ -52,5 +53,10 @@ router
 router
   .route("/:projectId/s/:sprintId/complete")
   .post(validateProjectPermission(PLANNERS), broadcast, completeSprint);
+
+// Review and correct the report of a sprint from before reports existed
+router
+  .route("/:projectId/s/:sprintId/report")
+  .put(validateProjectPermission(PLANNERS), broadcast, correctSprintReport);
 
 export default router;

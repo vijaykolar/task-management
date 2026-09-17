@@ -35,6 +35,13 @@ export interface SprintStats {
   computedAt: Date;
 }
 
+/**
+ * Where a sprint's report data comes from. Missing = recorded as it happened.
+ * "rebuilt": the sprint predates reports, so its data was reconstructed from
+ * history (approximate). "confirmed": an admin reviewed and corrected it.
+ */
+export type SprintReportSource = "rebuilt" | "confirmed";
+
 /** A time-boxed iteration. Tasks without a sprint are in the backlog. */
 export interface ISprint {
   project: Types.ObjectId;
@@ -48,6 +55,14 @@ export interface ISprint {
   completedAt?: Date;
   /** Missing for sprints started before reports existed */
   startSnapshot?: SprintSnapshotEntry[];
+  /**
+   * Tasks in the sprint when it ended. Only kept for rebuilt or corrected
+   * sprints, whose history can't tell this reliably.
+   */
+  endSnapshot?: SprintSnapshotEntry[];
+  reportSource?: SprintReportSource;
+  reportConfirmedAt?: Date;
+  reportConfirmedBy?: Types.ObjectId;
   stats?: SprintStats;
   createdBy: Types.ObjectId;
   createdAt: Date;
@@ -58,6 +73,15 @@ export type SprintDocument = HydratedDocument<ISprint>;
 
 const tallySchema = new Schema<Tally>(
   { count: { type: Number, default: 0 }, points: { type: Number, default: 0 } },
+  { _id: false },
+);
+
+const snapshotEntrySchema = new Schema<SprintSnapshotEntry>(
+  {
+    task: { type: Schema.Types.ObjectId, ref: "Task", required: true },
+    status: { type: String, required: true },
+    storyPoints: Number,
+  },
   { _id: false },
 );
 
@@ -81,19 +105,14 @@ const sprintSchema = new Schema<ISprint>(
     startedAt: Date,
     completedAt: Date,
     startSnapshot: {
-      type: [
-        new Schema<SprintSnapshotEntry>(
-          {
-            task: { type: Schema.Types.ObjectId, ref: "Task", required: true },
-            status: { type: String, required: true },
-            storyPoints: Number,
-          },
-          { _id: false },
-        ),
-      ],
+      type: [snapshotEntrySchema],
       // No snapshot and an empty one mean different things
       default: undefined,
     },
+    endSnapshot: { type: [snapshotEntrySchema], default: undefined },
+    reportSource: { type: String, enum: ["rebuilt", "confirmed"] },
+    reportConfirmedAt: Date,
+    reportConfirmedBy: { type: Schema.Types.ObjectId, ref: "User" },
     stats: {
       type: new Schema<SprintStats>(
         {

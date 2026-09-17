@@ -1,6 +1,8 @@
-import type { Types } from "mongoose";
+import { Types } from "mongoose";
 import type {
   SprintDocument,
+  SprintReportSource,
+  SprintSnapshotEntry,
   SprintStats,
   Tally,
 } from "../models/sprint.models.js";
@@ -66,6 +68,16 @@ export interface SeriesPoint {
   remaining: Tally | null;
 }
 
+/** A task in an admin-editable snapshot of a rebuilt sprint */
+export interface CorrectionTask {
+  _id: string;
+  key?: string;
+  title: string;
+  deleted: boolean;
+  storyPoints: number | null;
+  done: boolean;
+}
+
 export interface SprintReport {
   sprint: {
     _id: Types.ObjectId;
@@ -78,6 +90,17 @@ export interface SprintReport {
     completedAt?: Date;
   };
   approximate: boolean;
+  /**
+   * For sprints that predate reports: how the data was obtained, and the
+   * committed / end task lists an admin can correct
+   */
+  correction?: {
+    source: SprintReportSource;
+    confirmedAt?: Date;
+    committed: CorrectionTask[];
+    /** Missing while the sprint is still active */
+    atEnd?: CorrectionTask[];
+  };
   timeZone: string;
   summary: Omit<SprintStats, "approximate" | "computedAt">;
   series: SeriesPoint[];
@@ -87,6 +110,8 @@ export interface SprintReport {
     added: ReportTask[];
     removed: ReportTask[];
   };
+  /** Start / end membership as computed, used to freeze rebuilt sprints */
+  snapshots: { start: SprintSnapshotEntry[]; end: SprintSnapshotEntry[] };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -248,6 +273,22 @@ const stateAt = (timeline: Segment[], time: number): TaskState => {
 
 const isIn = (state: TaskState) => state.exists && state.inSprint;
 
+/** Replaces the task's state within [from, to) using `patch` */
+const overrideRange = (
+  timeline: Segment[],
+  from: number,
+  to: number,
+  patch: (state: TaskState) => TaskState,
+): Segment[] => {
+  const boundaries = [
+    ...new Set([...timeline.map((segment) => segment.at), from, to]),
+  ].sort((a, b) => a - b);
+  return boundaries.map((at) => {
+    const state = stateAt(timeline, at);
+    return { at, state: at >= from && at < to ? patch(state) : state };
+  });
+};
+
 // ---------- Report ----------
 
 interface LoadedTask {
@@ -281,7 +322,10 @@ const loadTasks = async (sprint: SprintDocument): Promise<LoadedTask[]> => {
   ]);
 
   const ids = new Map<string, Types.ObjectId>();
-  for (const entry of sprint.startSnapshot ?? []) {
+  for (const entry of [
+    ...(sprint.startSnapshot ?? []),
+    ...(sprint.endSnapshot ?? []),
+  ]) {
     ids.set(String(entry.task), entry.task);
   }
   for (const { task } of moved) ids.set(String(task), task);
@@ -383,7 +427,8 @@ export const buildSprintReport = async (
   );
   const sprintKey = String(sprint._id);
   const snapshot = sprint.startSnapshot;
-  const approximate = !snapshot;
+  // Recorded as it happened, or confirmed by an admin
+  const approximate = !snapshot || sprint.reportSource === "rebuilt";
 
   const [tasks, project] = await Promise.all([
     loadTasks(sprint),
@@ -396,6 +441,59 @@ export const buildSprintReport = async (
   const snapshotById = new Map(
     (snapshot ?? []).map((entry) => [String(entry.task), entry]),
   );
+
+  // Rebuilt or corrected sprints: the stored lists decide who was in the
+  // sprint at the start and end, even where history says otherwise
+  const endSnapshot = sprint.completedAt ? sprint.endSnapshot : undefined;
+  if (snapshot && (endSnapshot || sprint.reportSource)) {
+    const endById = new Map(
+      (endSnapshot ?? []).map((entry) => [String(entry.task), entry]),
+    );
+    for (const task of tasks) {
+      const start = snapshotById.get(task.id);
+      const end = endById.get(task.id);
+      let timeline = task.timeline;
+      const inAt = (time: number) => isIn(stateAt(timeline, time));
+      const enter = (state: TaskState) => ({
+        ...state,
+        exists: true,
+        inSprint: true,
+      });
+
+      if (start && !inAt(S)) {
+        // Committed but history lost the membership: in from the start, until
+        // it left (or the end, if it was still there)
+        const leftAt = endSnapshot && !end ? S + 1 : E;
+        timeline = overrideRange(timeline, S, leftAt, enter);
+      }
+      if (endSnapshot) {
+        if (end) {
+          if (!inAt(E - 1)) {
+            const firstIn = timeline.find(
+              (segment) => segment.at >= S && isIn(segment.state),
+            )?.at;
+            timeline = overrideRange(
+              timeline,
+              Math.max(S, Math.min(firstIn ?? S, E - 1)),
+              E,
+              enter,
+            );
+          }
+          timeline = overrideRange(timeline, E - 1, E, (state) => ({
+            ...enter(state),
+            status: end.status,
+            points: end.storyPoints ?? null,
+          }));
+        } else if (inAt(E - 1)) {
+          timeline = overrideRange(timeline, E - 1, E, (state) => ({
+            ...state,
+            inSprint: false,
+          }));
+        }
+      }
+      task.timeline = timeline;
+    }
+  }
 
   const committed = tally();
   const completed = tally();
@@ -414,6 +512,15 @@ export const buildSprintReport = async (
   };
   /** Tasks in the sprint at some point, used for the daily series */
   const everIn: LoadedTask[] = [];
+  const snapshots: SprintReport["snapshots"] = { start: [], end: [] };
+  const toEntry = (
+    id: string,
+    state: Pick<TaskState, "status" | "points">,
+  ) => ({
+    task: new Types.ObjectId(id),
+    status: state.status,
+    ...(state.points !== null && { storyPoints: state.points }),
+  });
 
   for (const task of tasks) {
     const { timeline } = task;
@@ -463,6 +570,7 @@ export const buildSprintReport = async (
     };
 
     if (startState) {
+      snapshots.start.push(toEntry(task.id, startState));
       addTo(committed, startState.points);
       estimateDelta +=
         (lastIn?.points ?? startState.points ?? 0) - (startState.points ?? 0);
@@ -479,6 +587,7 @@ export const buildSprintReport = async (
     }
 
     if (inAtEnd) {
+      snapshots.end.push(toEntry(task.id, endState));
       if (endState.points === null) unestimated += 1;
       if (isDone(endState.status)) {
         addTo(completed, endState.points);
@@ -566,6 +675,29 @@ export const buildSprintReport = async (
     key = next;
   }
 
+  // What an admin reviews when correcting a sprint from before reports
+  let correction: SprintReport["correction"];
+  if (sprint.reportSource) {
+    const infoById = new Map(tasks.map((task) => [task.id, task]));
+    const describe = (entry: SprintSnapshotEntry): CorrectionTask => {
+      const info = infoById.get(String(entry.task));
+      return {
+        _id: String(entry.task),
+        key: info?.key,
+        title: info?.title ?? "Deleted task",
+        deleted: info?.deleted ?? true,
+        storyPoints: entry.storyPoints ?? null,
+        done: isDone(entry.status),
+      };
+    };
+    correction = {
+      source: sprint.reportSource,
+      confirmedAt: sprint.reportConfirmedAt,
+      committed: snapshots.start.map(describe),
+      atEnd: sprint.completedAt ? snapshots.end.map(describe) : undefined,
+    };
+  }
+
   return {
     sprint: {
       _id: sprint._id,
@@ -578,6 +710,7 @@ export const buildSprintReport = async (
       completedAt: sprint.completedAt,
     },
     approximate,
+    correction,
     timeZone,
     summary: {
       committed: roundTally(committed),
@@ -590,6 +723,7 @@ export const buildSprintReport = async (
     },
     series,
     tasks: lists,
+    snapshots,
   };
 };
 

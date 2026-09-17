@@ -24,6 +24,8 @@ export interface User {
   isEmailVerified: boolean;
   /** Email me about assignments and mentions */
   emailNotifications: boolean;
+  /** IANA time zone from the browser; due date reminders follow it */
+  timeZone?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -287,6 +289,8 @@ export interface TaskDetail {
   doneChildCount: number;
   assignedTo?: UserSummary;
   assignedBy?: UserSummary;
+  /** People notified about changes to this task */
+  watchers: UserSummary[];
   attachments: TaskAttachment[];
   subtasks: Subtask[];
   createdAt: string;
@@ -360,16 +364,26 @@ export interface TaskActivity {
 
 // ---------- Notifications ----------
 
-export type NotificationType = "task_assigned" | "task_commented" | "mentioned";
+export type NotificationType =
+  | "task_assigned"
+  | "task_commented"
+  | "mentioned"
+  // For people watching a task
+  | "task_status_changed"
+  | "task_linked"
+  | "task_due_soon"
+  | "task_overdue";
 
 export interface AppNotification {
   _id: string;
   type: NotificationType;
+  /** Missing for reminders the app sends itself */
   actor?: UserSummary;
   project: string;
   task?: string;
   projectName: string;
   taskTitle?: string;
+  taskKey?: string;
   excerpt?: string;
   readAt?: string;
   createdAt: string;
@@ -430,6 +444,17 @@ export interface ReportTask {
   doneAtStart?: boolean;
 }
 
+/** A task in a correctable sprint report list */
+export interface CorrectionTask {
+  _id: string;
+  key?: string;
+  title: string;
+  deleted: boolean;
+  storyPoints: number | null;
+  /** Done at that moment (only meaningful at the end) */
+  done: boolean;
+}
+
 /** GET /reports/:projectId/sprints/:sprintId */
 export interface SprintReport {
   sprint: Pick<
@@ -445,6 +470,14 @@ export interface SprintReport {
   >;
   /** Rebuilt from history for sprints started before reports existed */
   approximate: boolean;
+  /** Sprints from before reports: the lists an admin can review and correct */
+  correction?: {
+    source: "rebuilt" | "confirmed";
+    confirmedAt?: string;
+    committed: CorrectionTask[];
+    /** Missing while the sprint is still active */
+    atEnd?: CorrectionTask[];
+  };
   timeZone: string;
   summary: {
     committed: Tally;

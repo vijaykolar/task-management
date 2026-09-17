@@ -26,6 +26,20 @@ export const sprintsApi = {
     ),
   start: (projectId: string, sprintId: string, body: SprintInput = {}) =>
     http.post<Sprint>(`/sprints/${projectId}/s/${sprintId}/start`, body),
+  /** Corrects the report of a sprint from before reports existed */
+  correctReport: (
+    projectId: string,
+    sprintId: string,
+    body: {
+      committed: { task: string }[];
+      atEnd?: { task: string; done: boolean }[];
+    },
+  ) =>
+    http.put<{ _id: string }>(
+      `/sprints/${projectId}/s/${sprintId}/report`,
+      body,
+    ),
+
   complete: (projectId: string, sprintId: string, moveOpenTo: string) =>
     http.post<{ doneCount: number; movedCount: number }>(
       `/sprints/${projectId}/s/${sprintId}/complete`,
@@ -108,6 +122,19 @@ export function useCompleteSprint(projectId: string) {
       sprintsApi
         .complete(projectId, sprintId, moveOpenTo)
         .then((res) => res.data),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCorrectSprintReport(projectId: string, sprintId: string) {
+  const invalidate = useInvalidatePlanning(projectId);
+  return useMutation({
+    mutationFn: (body: Parameters<typeof sprintsApi.correctReport>[2]) =>
+      sprintsApi
+        .correctReport(projectId, sprintId, body)
+        .then((res) => res.data),
+    meta: { successMessage: "Sprint report confirmed" },
+    // Reports live under the project's task queries, refreshed here too
     onSuccess: invalidate,
   });
 }

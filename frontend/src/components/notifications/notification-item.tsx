@@ -1,31 +1,42 @@
-import { AtSignIcon, MessageSquareIcon, UserPlusIcon } from "lucide-react";
+import {
+  AlarmClockIcon,
+  AtSignIcon,
+  BellIcon,
+  CalendarClockIcon,
+  Link2Icon,
+  MessageSquareIcon,
+  RefreshCwIcon,
+  UserPlusIcon,
+} from "lucide-react";
 import { Link } from "react-router";
 
 import { UserAvatar } from "@/components/common/user-avatar";
 import { notificationHref } from "@/features/notifications/hooks";
 import { displayName, formatDate, formatRelative } from "@/lib/format";
+import { notificationParts } from "@/lib/notification-text";
 import { cn } from "@/lib/utils";
 import type { AppNotification, NotificationType } from "@/types/models";
 
 const typeMeta: Record<
   NotificationType,
-  { icon: typeof AtSignIcon; verb: string; className: string }
+  { icon: typeof AtSignIcon; className: string }
 > = {
-  task_assigned: {
-    icon: UserPlusIcon,
-    verb: "assigned you to",
-    className: "bg-sky-500 text-white",
-  },
+  task_assigned: { icon: UserPlusIcon, className: "bg-sky-500 text-white" },
   task_commented: {
     icon: MessageSquareIcon,
-    verb: "commented on",
     className: "bg-emerald-500 text-white",
   },
-  mentioned: {
-    icon: AtSignIcon,
-    verb: "mentioned you in",
-    className: "bg-violet-500 text-white",
+  mentioned: { icon: AtSignIcon, className: "bg-violet-500 text-white" },
+  task_status_changed: {
+    icon: RefreshCwIcon,
+    className: "bg-sky-600 text-white",
   },
+  task_linked: { icon: Link2Icon, className: "bg-slate-500 text-white" },
+  task_due_soon: {
+    icon: CalendarClockIcon,
+    className: "bg-amber-500 text-white",
+  },
+  task_overdue: { icon: AlarmClockIcon, className: "bg-red-500 text-white" },
 };
 
 interface NotificationItemProps {
@@ -39,8 +50,14 @@ export function NotificationItem({
   onOpen,
   compact,
 }: NotificationItemProps) {
-  const meta = typeMeta[notification.type];
+  const meta = typeMeta[notification.type] ?? typeMeta.task_status_changed;
   const Icon = meta.icon;
+  const parts = notificationParts({
+    type: notification.type,
+    actorName: notification.actor ? displayName(notification.actor) : undefined,
+    taskKey: notification.taskKey,
+    taskTitle: notification.taskTitle,
+  });
   const isUnread = !notification.readAt;
 
   return (
@@ -56,7 +73,10 @@ export function NotificationItem({
         {notification.actor ? (
           <UserAvatar user={notification.actor} />
         ) : (
-          <span className="block size-8 rounded-full bg-muted" />
+          // Reminders come from the app, not a person
+          <span className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
+            <BellIcon className="size-4" />
+          </span>
         )}
         <span
           className={cn(
@@ -70,13 +90,16 @@ export function NotificationItem({
 
       <span className="min-w-0 flex-1 space-y-0.5">
         <span className="block leading-snug text-muted-foreground">
-          <span className="font-medium text-foreground">
-            {notification.actor ? displayName(notification.actor) : "Someone"}
-          </span>{" "}
-          {meta.verb}{" "}
-          <span className="font-medium text-foreground">
-            {notification.taskTitle ?? "a task"}
-          </span>
+          {parts.actor && (
+            <>
+              <span className="font-medium text-foreground">
+                {parts.actor}
+              </span>{" "}
+            </>
+          )}
+          {parts.verb && <>{parts.verb} </>}
+          <span className="font-medium text-foreground">{parts.task}</span>
+          {parts.suffix && <> {parts.suffix}</>}
         </span>
         {notification.excerpt && (
           <span
@@ -85,7 +108,10 @@ export function NotificationItem({
               compact ? "line-clamp-1" : "line-clamp-2",
             )}
           >
-            “{notification.excerpt}”
+            {notification.type === "task_commented" ||
+            notification.type === "mentioned"
+              ? `“${notification.excerpt}”`
+              : notification.excerpt}
           </span>
         )}
         <span className="block text-xs text-muted-foreground">

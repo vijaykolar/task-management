@@ -1,4 +1,4 @@
-import { BellRingIcon } from "lucide-react";
+import { BellRingIcon, GlobeIcon } from "lucide-react";
 
 import {
   Card,
@@ -14,7 +14,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { useUpdateAccount } from "@/features/auth/hooks";
+import { browserTimeZone, useUpdateAccount } from "@/features/auth/hooks";
 import type { User } from "@/types/models";
 
 export function NotificationSettingsCard({ user }: { user: User }) {
@@ -32,7 +32,8 @@ export function NotificationSettingsCard({ user }: { user: User }) {
           Notifications
         </CardTitle>
         <CardDescription>
-          In-app notifications are always on. Choose what we also email you.
+          In-app notifications are always on: assignments, @mentions and updates
+          on tasks you watch. Choose what we also email you.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -53,6 +54,22 @@ export function NotificationSettingsCard({ user }: { user: User }) {
               updateAccount.mutate({ emailNotifications })
             }
           />
+        </Field>
+
+        <Field orientation="horizontal" className="border-t pt-4">
+          <FieldContent>
+            <FieldLabel>
+              <GlobeIcon className="size-4 text-muted-foreground" />
+              Time zone
+            </FieldLabel>
+            <FieldDescription>
+              Due date reminders arrive on your local day. Taken from this
+              browser, so it follows you when you travel.
+            </FieldDescription>
+          </FieldContent>
+          <span className="text-sm font-medium">
+            {user.timeZone ?? browserTimeZone()}
+          </span>
         </Field>
       </CardContent>
     </Card>

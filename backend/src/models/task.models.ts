@@ -58,6 +58,8 @@ export interface ITask {
   /** Parent epic (a task of type "epic" in the same project) */
   epic?: Types.ObjectId;
   attachments: ITaskAttachment[];
+  /** People notified about changes to this task */
+  watchers: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -126,6 +128,10 @@ const taskSchema = new Schema<ITask>(
       ref: "Task",
       index: true,
     },
+    watchers: {
+      type: [{ type: Schema.Types.ObjectId, ref: "User" }],
+      default: [],
+    },
     attachments: {
       type: [
         {
@@ -154,5 +160,7 @@ const taskSchema = new Schema<ITask>(
 taskSchema.index({ key: 1 }, { unique: true });
 taskSchema.index({ project: 1, number: 1 }, { unique: true });
 taskSchema.index({ project: 1, sprint: 1, rank: 1 });
+// Due date reminders
+taskSchema.index({ dueDate: 1, statusCategory: 1 });
 
 export const Task = mongoose.model<ITask>("Task", taskSchema);

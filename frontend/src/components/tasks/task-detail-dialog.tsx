@@ -44,6 +44,7 @@ import {
   StoryPointsInput,
 } from "@/components/tasks/task-fields";
 import { TaskLinks, TaskPicker } from "@/components/tasks/task-links";
+import { TaskWatchers } from "@/components/tasks/task-watchers";
 import {
   TaskStatusBadge,
   TaskStatusSelect,
@@ -333,28 +334,37 @@ function TaskDetailContent({
           <LinkIcon />
         </Button>
 
-        {canManage && (
-          <div className="ml-auto flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onEdit(data)}
-              disabled={isPartial}
-            >
-              <PencilIcon />
-              <span className="max-sm:sr-only">Edit</span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(data)}
-            >
-              <Trash2Icon />
-              <span className="max-sm:sr-only">Delete</span>
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {!isPartial && (
+            <TaskWatchers
+              projectId={projectId}
+              taskId={taskId}
+              watchers={data.watchers ?? []}
+            />
+          )}
+          {canManage && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onEdit(data)}
+                disabled={isPartial}
+              >
+                <PencilIcon />
+                <span className="max-sm:sr-only">Edit</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => onDelete(data)}
+              >
+                <Trash2Icon />
+                <span className="max-sm:sr-only">Delete</span>
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_19rem] md:overflow-hidden">

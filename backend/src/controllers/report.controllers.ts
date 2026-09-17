@@ -24,7 +24,9 @@ const getSprintReport = asyncHandler<SprintParams>(async (req, res) => {
   }
 
   const timeZone = typeof req.query.tz === "string" ? req.query.tz : "UTC";
-  const report = await buildSprintReport(sprint, { timeZone });
+  const { snapshots: _snapshots, ...report } = await buildSprintReport(sprint, {
+    timeZone,
+  });
 
   return res
     .status(200)

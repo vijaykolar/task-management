@@ -46,8 +46,9 @@ export function NotificationsPage() {
         title="Notifications"
         description={
           <>
-            Assignments, comments on your tasks and @mentions. Email preferences
-            are in{" "}
+            Assignments, @mentions, and updates on tasks you watch: comments,
+            status changes, links and due dates. Only assignments and mentions
+            are emailed; preferences are in{" "}
             <Link to="/account" className="underline underline-offset-4">
               account settings
             </Link>

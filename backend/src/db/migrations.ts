@@ -1,10 +1,13 @@
 import mongoose from "mongoose";
 import { ProjectNote } from "../models/note.models.js";
 import { Task } from "../models/task.models.js";
+import { TaskComment } from "../models/taskcomment.models.js";
 import { DEFAULT_STATUSES, Project } from "../models/project.models.js";
+import { Sprint, SprintStatusEnum } from "../models/sprint.models.js";
 import { ProjectMember } from "../models/projectmember.models.js";
 import { UserRolesEnum, type UserRole } from "../utils/constants.js";
 import { plainTextToRichText } from "../utils/rich-text.js";
+import { buildSprintReport, toSprintStats } from "../utils/sprint-report.js";
 import { suggestProjectKey, uniqueProjectKey } from "../utils/workflow.js";
 
 const rolePriority: Record<UserRole, number> = {
@@ -257,6 +260,73 @@ const backfillTaskRanks = async () => {
   }
 };
 
+/**
+ * Sprints started before reports existed have no recorded start (or end).
+ * Rebuild them once from history and store the result, so their numbers stop
+ * shifting as tasks change later. Admins can then review and correct them.
+ */
+const freezeLegacySprintReports = async () => {
+  const legacy = await Sprint.find({
+    status: { $ne: SprintStatusEnum.PLANNED },
+    startSnapshot: { $exists: false },
+  });
+  for (const sprint of legacy) {
+    const report = await buildSprintReport(sprint);
+    sprint.startSnapshot = report.snapshots.start;
+    if (sprint.completedAt) {
+      sprint.endSnapshot = report.snapshots.end;
+      sprint.stats = toSprintStats(report);
+    }
+    sprint.reportSource = "rebuilt";
+    await sprint.save();
+  }
+  if (legacy.length > 0) {
+    console.log(`🛠  Froze rebuilt reports for ${legacy.length} older sprints`);
+  }
+};
+
+/**
+ * Tasks created before watchers existed: the reporter, the assignee and
+ * everyone who commented watch them, as they were notified about comments.
+ */
+const backfillTaskWatchers = async () => {
+  const tasks = await Task.find(
+    { watchers: { $exists: false } },
+    "_id assignedBy assignedTo",
+  ).lean();
+  if (tasks.length === 0) return;
+
+  const commenters = await TaskComment.aggregate<{
+    _id: mongoose.Types.ObjectId;
+    authors: mongoose.Types.ObjectId[];
+  }>([
+    { $match: { task: { $in: tasks.map((task) => task._id) } } },
+    { $group: { _id: "$task", authors: { $addToSet: "$author" } } },
+  ]);
+  const authorsByTask = new Map(
+    commenters.map((row) => [String(row._id), row.authors]),
+  );
+
+  await Task.bulkWrite(
+    tasks.map((task) => {
+      const ids = [
+        task.assignedBy,
+        task.assignedTo,
+        ...(authorsByTask.get(String(task._id)) ?? []),
+      ].filter((id): id is mongoose.Types.ObjectId => !!id);
+      const unique = [...new Map(ids.map((id) => [String(id), id])).values()];
+      return {
+        updateOne: {
+          filter: { _id: task._id },
+          update: { $set: { watchers: unique } },
+          timestamps: false,
+        },
+      };
+    }),
+  );
+  console.log(`🛠  Added watchers to ${tasks.length} tasks`);
+};
+
 export const runMigrations = async () => {
   await dropGlobalProjectNameIndex();
   await removeDuplicateMemberships();
@@ -266,6 +336,8 @@ export const runMigrations = async () => {
   await backfillProjectWorkflows();
   await backfillTicketKeys();
   await backfillTaskRanks();
+  await freezeLegacySprintReports();
+  await backfillTaskWatchers();
 
   const results = await Promise.allSettled(
     Object.values(mongoose.models).map((model) => model.createIndexes()),

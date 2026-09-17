@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 
+import type { NotificationType } from "@/types/models";
+
 export type RealtimeStatus = "connecting" | "open" | "closed";
 
 export type ProjectEventScope =
@@ -17,12 +19,15 @@ export type RealtimeEvent =
     }
   | {
       type: "notification";
-      kind: "task_assigned" | "task_commented" | "mentioned";
-      actorName: string;
+      kind: NotificationType;
+      /** Missing for reminders the app sends itself */
+      actorName?: string;
       projectId: string;
       projectName: string;
       taskId?: string;
       taskTitle?: string;
+      taskKey?: string;
+      excerpt?: string;
     };
 
 // Tiny external store so any component can read the connection status

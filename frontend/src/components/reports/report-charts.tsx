@@ -6,6 +6,7 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  ReferenceArea,
   ReferenceLine,
   XAxis,
   YAxis,
@@ -56,6 +57,24 @@ const burndownConfig = {
   ideal: { label: "Guideline", color: GUIDE },
 } satisfies ChartConfig;
 
+/** Saturday or Sunday, for a `YYYY-MM-DD` calendar day */
+const isWeekend = (date: string) => {
+  const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  return day === 0 || day === 6;
+};
+
+/** Consecutive weekend days as [first, last] positions, for shading */
+function weekendRuns(dates: string[]) {
+  const runs: [number, number][] = [];
+  dates.forEach((date, index) => {
+    if (date === "start" || !isWeekend(date)) return;
+    const last = runs.at(-1);
+    if (last && last[1] === index - 1) last[1] = index;
+    else runs.push([index, index]);
+  });
+  return runs;
+}
+
 export function BurndownChart({
   report,
   unit,
@@ -74,63 +93,124 @@ export function BurndownChart({
       : series.length - 1,
   );
 
+  // Work is only expected on weekdays: the guideline stays flat on weekends
+  const workingDaysUpTo: number[] = [];
+  series.forEach((point, index) => {
+    const before = workingDaysUpTo[index - 1] ?? 0;
+    workingDaysUpTo.push(
+      index === 0 || isWeekend(point.date) ? before : before + 1,
+    );
+  });
+  const totalWorkingDays = workingDaysUpTo[endIndex] ?? 0;
+  const progress = (index: number) =>
+    totalWorkingDays > 0
+      ? workingDaysUpTo[index]! / totalWorkingDays
+      : // A sprint made only of weekend days: fall back to calendar days
+        index / endIndex;
+
   const data = series.map((point, index) => ({
+    index,
     label: dayLabel(point.date),
     remaining: point.remaining?.[unit] ?? null,
     ideal:
       index <= endIndex
-        ? Math.round(start * (1 - index / endIndex) * 10) / 10
+        ? Math.round(start * (1 - progress(index)) * 10) / 10
         : null,
   }));
   const today = todayLabel(report);
+  const todayIndex = data.find((point) => point.label === today)?.index;
+  const weekends = weekendRuns(series.map((point) => point.date));
 
   return (
-    <ChartContainer
-      config={burndownConfig}
-      className="aspect-auto h-64 w-full"
-      aria-label={`Burndown chart: ${unitLabel(unit).toLowerCase()} remaining per day`}
-    >
-      <ComposedChart data={data} margin={{ top: 8, right: 12, left: -12 }}>
-        <CartesianGrid vertical={false} />
-        <XAxis dataKey="label" {...axisProps} minTickGap={16} />
-        <YAxis {...axisProps} allowDecimals={false} width={48} />
-        <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
-        <ChartLegend content={<ChartLegendContent />} />
-        {today && (
-          <ReferenceLine
-            x={today}
-            stroke={GUIDE}
-            strokeOpacity={0.5}
-            label={{
-              value: "Today",
-              position: "insideTopRight",
-              fill: GUIDE,
-              fontSize: 11,
-            }}
+    <div className="space-y-2">
+      <ChartContainer
+        config={burndownConfig}
+        className="aspect-auto h-64 w-full"
+        aria-label={`Burndown chart: ${unitLabel(unit).toLowerCase()} remaining per day, weekends shaded`}
+      >
+        <ComposedChart data={data} margin={{ top: 8, right: 12, left: -12 }}>
+          <CartesianGrid vertical={false} />
+          {/* Non-working days, drawn first so everything sits on top */}
+          {weekends.map(([first, last]) => (
+            <ReferenceArea
+              key={first}
+              x1={first - 0.5}
+              x2={last + 0.5}
+              ifOverflow="hidden"
+              fill="var(--muted-foreground)"
+              fillOpacity={0.08}
+              strokeOpacity={0}
+            />
+          ))}
+          <XAxis
+            dataKey="index"
+            type="number"
+            domain={[0, data.length - 1]}
+            ticks={data.map((point) => point.index)}
+            tickFormatter={(index: number) => data[index]?.label ?? ""}
+            {...axisProps}
+            minTickGap={16}
           />
-        )}
-        <Line
-          dataKey="ideal"
-          type="linear"
-          stroke="var(--color-ideal)"
-          strokeWidth={1.5}
-          strokeDasharray="4 4"
-          dot={false}
-          activeDot={false}
-          connectNulls
-          isAnimationActive={false}
-        />
-        <Line
-          dataKey="remaining"
-          type="stepAfter"
-          stroke="var(--color-remaining)"
-          strokeWidth={2}
-          dot={false}
-          activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--background)" }}
-          connectNulls={false}
-        />
-      </ComposedChart>
-    </ChartContainer>
+          <YAxis {...axisProps} allowDecimals={false} width={48} />
+          <ChartTooltip
+            content={
+              <ChartTooltipContent
+                indicator="line"
+                labelFormatter={(_, payload) => {
+                  const point = payload?.[0]?.payload as
+                    (typeof data)[number] | undefined;
+                  if (!point) return "";
+                  const date = series[point.index]?.date;
+                  return date && date !== "start" && isWeekend(date)
+                    ? `${point.label} · weekend`
+                    : point.label;
+                }}
+              />
+            }
+          />
+          <ChartLegend content={<ChartLegendContent />} />
+          {todayIndex !== undefined && (
+            <ReferenceLine
+              x={todayIndex}
+              stroke={GUIDE}
+              strokeOpacity={0.5}
+              label={{
+                value: "Today",
+                position: "insideTopRight",
+                fill: GUIDE,
+                fontSize: 11,
+              }}
+            />
+          )}
+          <Line
+            dataKey="ideal"
+            type="linear"
+            stroke="var(--color-ideal)"
+            strokeWidth={1.5}
+            strokeDasharray="4 4"
+            dot={false}
+            activeDot={false}
+            connectNulls
+            isAnimationActive={false}
+          />
+          <Line
+            dataKey="remaining"
+            type="stepAfter"
+            stroke="var(--color-remaining)"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--background)" }}
+            connectNulls={false}
+          />
+        </ComposedChart>
+      </ChartContainer>
+      {weekends.length > 0 && (
+        <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <span className="inline-block size-2.5 rounded-sm bg-muted-foreground/15" />
+          Weekends: no work expected, so the guideline stays flat
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -26,11 +26,14 @@ export type RealtimeEvent =
   | {
       type: "notification";
       kind: string;
-      actorName: string;
+      /** Missing for reminders the app sends on its own */
+      actorName?: string;
       projectId: string;
       projectName: string;
       taskId?: string;
       taskTitle?: string;
+      taskKey?: string;
+      excerpt?: string;
     };
 
 const clients = new Map<string, Set<Response>>();

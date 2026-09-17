@@ -21,6 +21,8 @@ export interface IUser {
   fullName?: string;
   password: string;
   isEmailVerified: boolean;
+  /** IANA time zone from the browser, e.g. "Asia/Kolkata"; used for reminders */
+  timeZone?: string;
   /** Email me about assignments and mentions */
   emailNotifications: boolean;
   refreshToken?: string;
@@ -103,6 +105,7 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
       type: Boolean,
       default: true,
     },
+    timeZone: { type: String, trim: true },
     refreshToken: {
       type: String,
     },

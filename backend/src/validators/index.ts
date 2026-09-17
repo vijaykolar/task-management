@@ -74,11 +74,17 @@ const updateAccountValidator = (): ValidationChain[] => {
       .isBoolean()
       .withMessage("emailNotifications must be true or false")
       .toBoolean(),
+    // Sent by the app from the browser, for due date reminders
+    body("timeZone")
+      .optional()
+      .custom(isValidTimeZone)
+      .withMessage("Time zone is invalid"),
     body("username").not().exists().withMessage("Username can't be changed"),
     body().custom((value) => {
       if (
         value?.fullName === undefined &&
-        value?.emailNotifications === undefined
+        value?.emailNotifications === undefined &&
+        value?.timeZone === undefined
       ) {
         throw new Error("Nothing to update");
       }

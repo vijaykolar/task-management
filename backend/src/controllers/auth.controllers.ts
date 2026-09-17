@@ -424,6 +424,9 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         ...(req.body.emailNotifications !== undefined && {
           emailNotifications: req.body.emailNotifications,
         }),
+        ...(req.body.timeZone !== undefined && {
+          timeZone: req.body.timeZone,
+        }),
       },
     },
     { new: true, runValidators: true },

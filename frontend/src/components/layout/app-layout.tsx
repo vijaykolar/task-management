@@ -12,13 +12,15 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { useCurrentUser } from "@/features/auth/hooks";
+import { useCurrentUser, useSyncTimeZone } from "@/features/auth/hooks";
 import { useRealtimeConnection } from "@/features/realtime/use-realtime-connection";
 
 /** Shell for authenticated pages. Rendered inside <RequireAuth />. */
 export function AppLayout() {
   const { data: user } = useCurrentUser();
   useRealtimeConnection(user?._id);
+  // Due date reminders follow the browser's time zone
+  useSyncTimeZone(user ?? undefined);
   if (!user) return null;
 
   return (

@@ -4,6 +4,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { authApi } from "@/features/auth/api";
 import { ApiClientError } from "@/lib/axios";
@@ -135,8 +136,11 @@ function useApplyUpdatedUser() {
 export function useUpdateAccount() {
   const applyUser = useApplyUpdatedUser();
   return useMutation({
-    mutationFn: (body: { fullName?: string; emailNotifications?: boolean }) =>
-      authApi.updateAccount(body).then((res) => res.data),
+    mutationFn: (body: {
+      fullName?: string;
+      emailNotifications?: boolean;
+      timeZone?: string;
+    }) => authApi.updateAccount(body).then((res) => res.data),
     meta: { silent: true, successMessage: "Profile updated" },
     onSuccess: applyUser,
   });
@@ -159,4 +163,36 @@ export function useRemoveAvatar() {
     meta: { successMessage: "Avatar removed" },
     onSuccess: applyUser,
   });
+}
+
+/** The browser's time zone, e.g. "Asia/Kolkata" */
+export function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+/**
+ * Keeps the signed-in user's stored time zone in step with their browser, so
+ * due date reminders arrive on their local day. Runs once per change, quietly.
+ */
+export function useSyncTimeZone(user: User | undefined) {
+  const queryClient = useQueryClient();
+  const saved = user?.timeZone;
+  const userId = user?._id;
+
+  useEffect(() => {
+    const timeZone = browserTimeZone();
+    if (!userId || saved === timeZone) return;
+    void authApi
+      .updateAccount({ timeZone })
+      .then((res) =>
+        queryClient.setQueryData<User>(queryKeys.auth.currentUser(), res.data),
+      )
+      .catch(() => {
+        // Not worth bothering anyone about; reminders fall back to UTC
+      });
+  }, [userId, saved, queryClient]);
 }

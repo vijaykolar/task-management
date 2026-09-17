@@ -67,8 +67,10 @@ import {
   startOfTodayUtc,
 } from "../utils/task-fields.js";
 import { nextRank, rankBetween } from "../utils/rank.js";
+import { addWatchers, watchersOf } from "../utils/watchers.js";
 import {
   TASK_KEY_PATTERN,
+  projectStatuses,
   reserveTaskNumber,
   resolveStatus,
 } from "../utils/workflow.js";
@@ -494,6 +496,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
             subtasks: 0,
             attachments: 0,
             descriptionText: 0,
+            watchers: 0,
             comments: 0,
             titleLower: 0,
             dueSort: 0,
@@ -645,6 +648,13 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
       sprint,
       epic,
       assignedBy: currentUser._id,
+      watchers: [
+        ...new Map(
+          [currentUser._id, assignee]
+            .filter((id): id is Types.ObjectId => !!id)
+            .map((id) => [String(id), id]),
+        ).values(),
+      ],
       attachments: files.map((file) => toAttachment(req, file)),
     });
 
@@ -693,6 +703,15 @@ const getTaskById = asyncHandler<TaskParams>(async (req, res) => {
     },
     ...lookupUser("assignedTo"),
     ...lookupUser("assignedBy"),
+    {
+      $lookup: {
+        from: "users",
+        localField: "watchers",
+        foreignField: "_id",
+        as: "watchers",
+        pipeline: [{ $project: USER_SUMMARY }],
+      },
+    },
     ...lookupEpic,
     ...lookupOpenBlockers,
     {
@@ -774,6 +793,8 @@ interface TaskChanges {
   previousDescription?: string;
   /** The task stopped being an epic, so its children lose their epic */
   demotedEpic: boolean;
+  /** Status names before and after, for watchers */
+  statusChange?: { from: string; to: string };
 }
 
 /**
@@ -809,6 +830,13 @@ const applyTaskChanges = async (
   }
   if (body.status !== undefined && body.status !== task.status) {
     const status = resolveStatus(project, body.status);
+    const statusName = (key: string) =>
+      projectStatuses(project).find((candidate) => candidate.key === key)
+        ?.name ?? key;
+    changes.statusChange = {
+      from: statusName(task.status),
+      to: status.name,
+    };
     history.push({
       type: TaskActivityTypeEnum.STATUS_CHANGED,
       from: task.status,
@@ -1019,6 +1047,43 @@ const rankTask = asyncHandler<TaskParams>(async (req, res) => {
     );
 });
 
+/**
+ * PUT /tasks/:projectId/t/:taskId/watch — start watching
+ * DELETE /tasks/:projectId/t/:taskId/watch — stop watching
+ * Returns the watchers. Every project member can watch any task.
+ */
+const setWatching = (watching: boolean) =>
+  asyncHandler<TaskParams>(async (req, res) => {
+    const currentUser = requireUser(req);
+    const task = await findTaskInProject(
+      req.params.projectId,
+      req.params.taskId,
+    );
+    await Task.updateOne(
+      { _id: task._id },
+      watching
+        ? { $addToSet: { watchers: currentUser._id } }
+        : { $pull: { watchers: currentUser._id } },
+      { timestamps: false },
+    );
+    const watchers = await User.find(
+      { _id: { $in: await watchersOf(task._id) } },
+      USER_SUMMARY,
+    ).lean();
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          watchers,
+          watching ? "Watching this task" : "Stopped watching",
+        ),
+      );
+  });
+
+const watchTask = setWatching(true);
+const unwatchTask = setWatching(false);
+
 /** Saves applied changes and records their history and notifications */
 const saveTaskChanges = async (
   task: TaskDocument,
@@ -1028,6 +1093,18 @@ const saveTaskChanges = async (
   await task.save();
   await logActivity(task, actor._id, changes.history);
   await notifyAssignee(actor, task, changes.newAssignee);
+  // A new assignee follows the task from now on
+  if (changes.newAssignee) await addWatchers(task._id, [changes.newAssignee]);
+  if (changes.statusChange) {
+    await notify({
+      type: NotificationTypeEnum.TASK_STATUS_CHANGED,
+      recipients: await watchersOf(task._id),
+      actor,
+      project: await projectSummary(task.project),
+      task,
+      excerpt: `${changes.statusChange.from} → ${changes.statusChange.to}`,
+    });
+  }
   if (changes.previousDescription !== undefined) {
     await notifyDescriptionMentions(
       actor,
@@ -1299,6 +1376,37 @@ const addTaskLink = asyncHandler<TaskParams>(async (req, res) => {
       to: { _id: task._id, key: task.key, name: task.title },
     },
   ]);
+
+  const project = await projectSummary(current.project);
+  const phrases: Record<TaskLinkType, [string, string]> = {
+    blocks: ["blocks", "is blocked by"],
+    relates_to: ["relates to", "relates to"],
+    duplicates: ["duplicates", "is duplicated by"],
+  };
+  const [outward, inwardPhrase] = phrases[type];
+  const [sourceWatchers, targetWatchers] = await Promise.all([
+    watchersOf(task._id),
+    watchersOf(target._id),
+  ]);
+  await notify({
+    type: NotificationTypeEnum.TASK_LINKED,
+    recipients: sourceWatchers,
+    actor: currentUser,
+    project,
+    task,
+    excerpt: `${outward} ${target.key} ${target.title}`,
+  });
+  await notify({
+    type: NotificationTypeEnum.TASK_LINKED,
+    // Watching both tasks: one notification is enough
+    recipients: targetWatchers.filter(
+      (id) => !sourceWatchers.some((other) => other.equals(id)),
+    ),
+    actor: currentUser,
+    project,
+    task: target,
+    excerpt: `${inwardPhrase} ${task.key} ${task.title}`,
+  });
 
   const [created] = await linksOf(current._id, { _id: link._id });
   return res.status(201).json(new ApiResponse(201, created, "Link added"));
@@ -1655,9 +1763,7 @@ const notifyAboutComment = async (
 
   if (!includeFollowers) return;
 
-  const commenters = await TaskComment.distinct("author", { task: task._id });
-  const followers = [task.assignedTo, task.assignedBy, ...commenters]
-    .filter(Boolean)
+  const followers = (await watchersOf(task._id))
     .map(String)
     .filter((id) => !mentioned.includes(id));
 
@@ -1689,6 +1795,7 @@ const addTaskComment = asyncHandler<TaskParams>(async (req, res) => {
   await logActivity(task, currentUser._id, [
     { type: TaskActivityTypeEnum.COMMENT_ADDED },
   ]);
+  await addWatchers(task._id, [currentUser._id]);
   await notifyAboutComment(currentUser, task, extractMentionIds(html), text, {
     includeFollowers: true,
   });
@@ -1856,6 +1963,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
           $project: {
             attachments: 0,
             descriptionText: 0,
+            watchers: 0,
             dueSort: 0,
             priorityRank: 0,
             description: 0,
@@ -1916,6 +2024,8 @@ const getMyTasks = asyncHandler(async (req, res) => {
 });
 
 export {
+  watchTask,
+  unwatchTask,
   rankTask,
   addTaskLink,
   bulkUpdateTasks,

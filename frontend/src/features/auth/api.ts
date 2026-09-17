@@ -60,8 +60,11 @@ export const authApi = {
   changePassword: (body: ChangePasswordInput) =>
     http.post<Record<string, never>>("/auth/change-password", body),
 
-  updateAccount: (body: { fullName?: string; emailNotifications?: boolean }) =>
-    http.patch<User>("/auth/update-account", body),
+  updateAccount: (body: {
+    fullName?: string;
+    emailNotifications?: boolean;
+    timeZone?: string;
+  }) => http.patch<User>("/auth/update-account", body),
 
   updateAvatar: (file: File) => {
     const form = new FormData();
