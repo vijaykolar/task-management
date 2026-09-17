@@ -1,14 +1,23 @@
 import {
+  closestCenter,
   DndContext,
   DragOverlay,
   PointerSensor,
+  pointerWithin,
   TouchSensor,
-  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragMoveEvent,
 } from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   CalendarRangeIcon,
   CheckCircle2Icon,
@@ -22,7 +31,7 @@ import {
   UserRoundIcon,
   ZapIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { UserAvatar } from "@/components/common/user-avatar";
 import {
@@ -65,7 +74,11 @@ import {
   useSprints,
   useStartSprint,
 } from "@/features/sprints/hooks";
-import { useSprintTasks, useUpdateTask } from "@/features/tasks/hooks";
+import {
+  useRankTask,
+  useSprintTasks,
+  useUpdateTask,
+} from "@/features/tasks/hooks";
 import { formatDueDate } from "@/lib/due-date";
 import { displayName } from "@/lib/format";
 import { formatPoints } from "@/lib/story-points";
@@ -75,9 +88,85 @@ import type { Sprint, TaskListItem } from "@/types/models";
 const BACKLOG = "backlog";
 
 interface DragData {
+  kind: "task";
   task: TaskListItem;
   /** Sprint id the task is dragged from; "" = backlog */
   from: string;
+}
+
+/** Where a dragged task would land if dropped now */
+interface DropTarget {
+  /** Sprint id; "" = backlog */
+  sectionId: string;
+  afterId?: string;
+  beforeId?: string;
+}
+
+const isTaskData = (data: unknown): data is DragData =>
+  (data as DragData | undefined)?.kind === "task";
+
+// Rows win over the section around them; fall back to the nearest row
+const collisionDetection: CollisionDetection = (args) => {
+  const hits = pointerWithin(args);
+  const rows = hits.filter(({ id }) => !String(id).startsWith("section-"));
+  if (rows.length > 0) return rows;
+  return hits.length > 0 ? hits : closestCenter(args);
+};
+
+/** Current pointer height: where the drag started plus how far it moved */
+function pointerY(event: DragMoveEvent) {
+  const start = event.activatorEvent;
+  const startY =
+    "touches" in start
+      ? (start as TouchEvent).touches[0]?.clientY
+      : (start as MouseEvent).clientY;
+  return startY === undefined ? undefined : startY + event.delta.y;
+}
+
+/**
+ * Works out the drop position. Within a section, a task dragged down lands
+ * after the row it's over and one dragged up lands before it. From another
+ * section, it lands above or below the row depending on which half of the
+ * row the pointer is in.
+ */
+function resolveDropTarget(
+  { active, over, ...event }: DragMoveEvent,
+  sectionItems: Map<string, TaskListItem[]>,
+): DropTarget | null {
+  const data = active.data.current;
+  if (!over || !isTaskData(data)) return null;
+  const overData = over.data.current;
+
+  if (isTaskData(overData)) {
+    if (overData.task._id === data.task._id) return null;
+    const sectionId = overData.from;
+    const items = sectionItems.get(sectionId) ?? [];
+    let below: boolean;
+    if (sectionId === data.from) {
+      const from = items.findIndex((item) => item._id === data.task._id);
+      const to = items.findIndex((item) => item._id === overData.task._id);
+      below = from !== -1 && from < to;
+    } else {
+      const y = pointerY({ active, over, ...event });
+      const dragged = active.rect.current.translated;
+      const middle = over.rect.top + over.rect.height / 2;
+      below =
+        y !== undefined
+          ? y > middle
+          : !!dragged && dragged.top + dragged.height / 2 > middle;
+    }
+    return below
+      ? { sectionId, afterId: overData.task._id }
+      : { sectionId, beforeId: overData.task._id };
+  }
+
+  // Dropped on a section, not a row: add it to the end of that list
+  const sectionId = overData?.sprintId as string | undefined;
+  if (sectionId === undefined) return null;
+  const others = (sectionItems.get(sectionId) ?? []).filter(
+    (item) => item._id !== data.task._id,
+  );
+  return { sectionId, afterId: others.at(-1)?._id };
 }
 
 interface BacklogViewProps {
@@ -96,6 +185,7 @@ export function BacklogView({
 }: BacklogViewProps) {
   const sprints = useSprints(projectId);
   const updateTask = useUpdateTask(projectId);
+  const rankTask = useRankTask(projectId);
   const startSprint = useStartSprint(projectId);
   const deleteSprint = useDeleteSprint(projectId);
 
@@ -116,6 +206,15 @@ export function BacklogView({
     updateTask.mutate({ taskId, sprint: sprintId });
 
   const [dragged, setDragged] = useState<DragData | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  // The loaded tasks of each section, in order, for working out drop positions
+  const sectionItems = useRef(new Map<string, TaskListItem[]>());
+  const registerItems = useCallback(
+    (sectionId: string, items: TaskListItem[]) =>
+      sectionItems.current.set(sectionId, items),
+    [],
+  );
+
   // A small movement threshold keeps clicks on rows working
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -123,13 +222,49 @@ export function BacklogView({
       activationConstraint: { delay: 200, tolerance: 6 },
     }),
   );
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+
+  const endDrag = () => {
     setDragged(null);
-    const data = active.data.current as DragData | undefined;
-    const target = over?.data.current?.sprintId as string | undefined;
-    if (data && target !== undefined && target !== data.from) {
-      moveTask(data.task._id, target);
+    setDropTarget(null);
+  };
+
+  // Recomputed on every move so the drop line follows the pointer within a row
+  const handleDragMove = (event: DragMoveEvent) => {
+    const next = resolveDropTarget(event, sectionItems.current);
+    setDropTarget((current) =>
+      current?.sectionId === next?.sectionId &&
+      current?.afterId === next?.afterId &&
+      current?.beforeId === next?.beforeId
+        ? current
+        : next,
+    );
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const data = event.active.data.current;
+    const target = resolveDropTarget(event, sectionItems.current);
+    endDrag();
+    if (!target || !isTaskData(data)) return;
+
+    // Dropping a task back where it was changes nothing
+    if (target.sectionId === data.from) {
+      const items = sectionItems.current.get(target.sectionId) ?? [];
+      const index = items.findIndex((item) => item._id === data.task._id);
+      if (
+        (target.afterId && items[index - 1]?._id === target.afterId) ||
+        (target.beforeId && items[index + 1]?._id === target.beforeId) ||
+        (!target.afterId && !target.beforeId && index === items.length - 1)
+      ) {
+        return;
+      }
     }
+
+    rankTask.mutate({
+      taskId: data.task._id,
+      sprint: target.sectionId,
+      afterId: target.afterId,
+      beforeId: target.beforeId,
+    });
   };
 
   if (sprints.isPending) {
@@ -148,16 +283,20 @@ export function BacklogView({
     onMoveTask: moveTask,
     moveTargets: current,
     dragged,
+    dropTarget,
+    registerItems,
   };
 
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={collisionDetection}
       onDragStart={({ active }) =>
-        setDragged((active.data.current as DragData) ?? null)
+        setDragged(isTaskData(active.data.current) ? active.data.current : null)
       }
+      onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setDragged(null)}
+      onDragCancel={endDrag}
     >
       <div className="space-y-4">
         {canManage && (
@@ -449,6 +588,8 @@ interface TaskSectionProps {
   canManage: boolean;
   moveTargets: Sprint[];
   dragged: DragData | null;
+  dropTarget: DropTarget | null;
+  registerItems: (sectionId: string, items: TaskListItem[]) => void;
   onOpenTask: (taskId: string) => void;
   onMoveTask: (taskId: string, sprintId: string) => void;
 }
@@ -461,6 +602,8 @@ function TaskSection({
   canManage,
   moveTargets,
   dragged,
+  dropTarget,
+  registerItems,
   onOpenTask,
   onMoveTask,
 }: TaskSectionProps) {
@@ -469,19 +612,24 @@ function TaskSection({
   const items = tasks.data?.pages.flatMap((page) => page.items) ?? [];
   const total = tasks.data?.pages[0]?.pagination.total ?? 0;
   const acceptsDrops = canManage && sprint?.status !== "completed";
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef } = useDroppable({
     id: `section-${sectionId || BACKLOG}`,
     data: { sprintId: sectionId },
     disabled: !acceptsDrops,
   });
-  const highlighted = isOver && !!dragged && dragged.from !== sectionId;
+  registerItems(sectionId, items);
+  // Tasks coming from another list: highlight the list and mark the gap
+  const incoming =
+    !!dragged &&
+    dragged.from !== sectionId &&
+    dropTarget?.sectionId === sectionId;
 
   return (
     <section
       ref={setNodeRef}
       className={cn(
         "rounded-xl border bg-card transition-colors",
-        highlighted && "border-primary/50 bg-primary/5",
+        incoming && "border-primary/50 bg-primary/5",
       )}
     >
       <div className="border-b px-4 py-3">{header}</div>
@@ -495,7 +643,12 @@ function TaskSection({
           ))}
 
         {tasks.isSuccess && items.length === 0 && (
-          <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+          <li
+            className={cn(
+              "px-4 py-6 text-center text-sm text-muted-foreground",
+              incoming && "text-primary",
+            )}
+          >
             {sprint
               ? canManage
                 ? "Drag tasks here from the backlog to plan this sprint"
@@ -504,18 +657,32 @@ function TaskSection({
           </li>
         )}
 
-        {items.map((task) => (
-          <BacklogRow
-            key={task._id}
-            task={task}
-            projectId={projectId}
-            sectionId={sectionId}
-            canManage={canManage}
-            moveTargets={moveTargets}
-            onOpen={() => onOpenTask(task._id)}
-            onMove={(sprintId) => onMoveTask(task._id, sprintId)}
-          />
-        ))}
+        <SortableContext
+          items={items.map((task) => task._id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {items.map((task) => (
+            <BacklogRow
+              key={task._id}
+              task={task}
+              projectId={projectId}
+              sectionId={sectionId}
+              canManage={acceptsDrops}
+              moveTargets={moveTargets}
+              dropIndicator={
+                incoming
+                  ? dropTarget?.beforeId === task._id
+                    ? "before"
+                    : dropTarget?.afterId === task._id
+                      ? "after"
+                      : undefined
+                  : undefined
+              }
+              onOpen={() => onOpenTask(task._id)}
+              onMove={(sprintId) => onMoveTask(task._id, sprintId)}
+            />
+          ))}
+        </SortableContext>
       </ul>
 
       {tasks.hasNextPage && (
@@ -542,20 +709,29 @@ interface BacklogRowProps {
   sectionId: string;
   canManage: boolean;
   moveTargets: Sprint[];
+  /** Line showing where a task from another list will be dropped */
+  dropIndicator?: "before" | "after";
   onOpen?: () => void;
   onMove?: (sprintId: string) => void;
 }
 
 function BacklogRow(props: BacklogRowProps) {
-  const { setNodeRef, listeners, isDragging } = useDraggable({
-    id: props.task._id,
-    data: { task: props.task, from: props.sectionId } satisfies DragData,
-    disabled: !props.canManage,
-  });
+  const { setNodeRef, listeners, isDragging, transform, transition } =
+    useSortable({
+      id: props.task._id,
+      data: {
+        kind: "task",
+        task: props.task,
+        from: props.sectionId,
+      } satisfies DragData,
+      disabled: !props.canManage,
+    });
   return (
     <BacklogRowContent
       {...props}
       rowRef={setNodeRef}
+      // Rows in the same list slide apart to show where the task will land
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       // Pointer/touch dragging only; keyboard users move tasks from the menu
       dragListeners={listeners}
       isDragging={isDragging}
@@ -571,23 +747,31 @@ function BacklogRowContent({
   moveTargets,
   onOpen,
   onMove,
+  dropIndicator,
   rowRef,
+  style,
   dragListeners,
   isDragging,
 }: BacklogRowProps & {
   rowRef?: (node: HTMLElement | null) => void;
-  dragListeners?: ReturnType<typeof useDraggable>["listeners"];
+  style?: React.CSSProperties;
+  dragListeners?: ReturnType<typeof useSortable>["listeners"];
   isDragging?: boolean;
 }) {
   const isDone = task.statusCategory === "done";
   return (
     <li
       ref={rowRef}
+      style={style}
       {...dragListeners}
       className={cn(
-        "group/row relative flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-muted/40",
+        "group/row relative flex items-center gap-3 bg-card px-4 py-2.5 text-sm hover:bg-muted/40",
         canManage && "cursor-grab active:cursor-grabbing",
-        isDragging && "opacity-40",
+        isDragging && "relative z-10 opacity-40",
+        dropIndicator &&
+          "after:pointer-events-none after:absolute after:inset-x-2 after:h-0.5 after:rounded-full after:bg-primary",
+        dropIndicator === "before" && "after:-top-px",
+        dropIndicator === "after" && "after:-bottom-px",
       )}
     >
       <TaskTypeIcon type={task.type} />

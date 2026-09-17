@@ -391,7 +391,26 @@ const dashboardQueryValidator = (): ValidationChain[] => {
   ];
 };
 
+const rankTaskValidator = (): ValidationChain[] => {
+  return [
+    // "" or "backlog" = the backlog
+    body("sprint")
+      .optional({ values: "falsy" })
+      .custom((value) => value === "backlog" || /^[0-9a-f]{24}$/i.test(value))
+      .withMessage("Sprint is invalid"),
+    body("afterId")
+      .optional({ values: "null" })
+      .isMongoId()
+      .withMessage("afterId is invalid"),
+    body("beforeId")
+      .optional({ values: "null" })
+      .isMongoId()
+      .withMessage("beforeId is invalid"),
+  ];
+};
+
 export {
+  rankTaskValidator,
   dashboardQueryValidator,
   bulkTaskValidator,
   savedFilterValidator,

@@ -20,7 +20,7 @@ import type {
 } from "@/types/models";
 
 export type TaskSort =
-  "createdAt" | "updatedAt" | "title" | "dueDate" | "priority" | "key";
+  "createdAt" | "updatedAt" | "title" | "dueDate" | "priority" | "key" | "rank";
 
 export interface TaskListParams extends ListParams<TaskSort> {
   /** A status key from the workflow */
@@ -78,6 +78,14 @@ export interface LinkInput {
   direction: "outward" | "inward";
 }
 
+/** Where a dragged task lands: in `sprint`, after or before a neighbour */
+export interface RankInput {
+  /** Sprint id; "" = backlog */
+  sprint: string;
+  afterId?: string;
+  beforeId?: string;
+}
+
 export interface BulkChanges {
   status?: TaskStatus;
   priority?: TaskPriority;
@@ -126,6 +134,12 @@ export const tasksApi = {
   byKey: (key: string) =>
     http.get<{ _id: string; key: string; project: string }>(
       `/tasks/key/${encodeURIComponent(key)}`,
+    ),
+
+  rank: (projectId: string, taskId: string, input: RankInput) =>
+    http.put<{ _id: string; rank: number; sprint: string | null }>(
+      `/tasks/${projectId}/t/${taskId}/rank`,
+      input,
     ),
 
   bulk: (

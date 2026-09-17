@@ -92,6 +92,7 @@ const sortLabels: Record<TaskSort, string> = {
   priority: "Priority",
   title: "Title",
   key: "Key",
+  rank: "Backlog order",
 };
 
 const FIELD_FILTER_KEYS = [

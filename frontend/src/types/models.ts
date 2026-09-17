@@ -212,6 +212,8 @@ export interface TaskListItem {
   /** Ticket key, e.g. SPST-12 */
   key: string;
   number: number;
+  /** Manual backlog order; lower = higher up */
+  rank: number;
   type: TaskType;
   title: string;
   description?: string;

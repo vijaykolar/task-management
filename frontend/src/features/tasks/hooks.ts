@@ -7,10 +7,12 @@ import {
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import {
   type BulkChanges,
   type LinkInput,
+  type RankInput,
   type MyTaskParams,
   tasksApi,
   type SubtaskInput,
@@ -348,8 +350,9 @@ export function useSprintTasks(projectId: string, sprint: string) {
     sprint,
     // Epics sit above sprints, so plan work items only
     type: "work",
-    sort: "priority",
-    order: "desc",
+    // Manual order, set by dragging
+    sort: "rank",
+    order: "asc",
     limit: 25,
   } as const;
   return useInfiniteQuery({
@@ -361,6 +364,66 @@ export function useSprintTasks(projectId: string, sprint: string) {
     initialPageParam: 1,
     getNextPageParam: (last) =>
       last.pagination.hasNextPage ? last.pagination.page + 1 : undefined,
+  });
+}
+
+/**
+ * Drag and drop in the backlog: moves a task within or between sprints. The
+ * cached sections update right away and roll back if the server refuses.
+ */
+export function useRankTask(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, ...input }: RankInput & { taskId: string }) =>
+      tasksApi.rank(projectId, taskId, input).then((res) => res.data),
+    meta: { silent: true },
+    onMutate: async ({ taskId, sprint, afterId, beforeId }) => {
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.tasks.columns(projectId),
+      });
+      const sections = getColumns(queryClient, projectId).filter(
+        ({ params }) => params.view === "backlog",
+      );
+      const task = findCachedTask(queryClient, projectId, taskId);
+      if (!task) return { sections };
+      const moved: TaskListItem = { ...task, sprint: sprint || undefined };
+      const target = sprint || "backlog";
+
+      for (const { key, data, params } of sections) {
+        if (!data || !("pages" in data)) continue;
+        const pages = data.pages.map((page) => ({
+          ...page,
+          items: page.items.filter((item) => item._id !== taskId),
+        }));
+        if (params.sprint === target) {
+          const neighbourId = afterId ?? beforeId;
+          const pageIndex = neighbourId
+            ? pages.findIndex((page) =>
+                page.items.some((item) => item._id === neighbourId),
+              )
+            : 0;
+          const page = pages[Math.max(pageIndex, 0)];
+          if (page) {
+            const items = [...page.items];
+            const at = neighbourId
+              ? items.findIndex((item) => item._id === neighbourId) +
+                (afterId ? 1 : 0)
+              : 0;
+            items.splice(Math.max(at, 0), 0, moved);
+            pages[Math.max(pageIndex, 0)] = { ...page, items };
+          }
+        }
+        queryClient.setQueryData<TaskPages>(key, { ...data, pages });
+      }
+      return { sections };
+    },
+    onError: (error, _input, context) => {
+      for (const { key, data } of context?.sections ?? []) {
+        queryClient.setQueryData(key, data);
+      }
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateProjectTasks(queryClient, projectId),
   });
 }
 

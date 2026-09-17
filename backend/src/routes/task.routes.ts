@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  rankTask,
   addTaskLink,
   bulkUpdateTasks,
   deleteSavedFilter,
@@ -34,6 +35,7 @@ import { broadcastProjectChange } from "../middlewares/realtime.middleware.js";
 import { validate } from "../middlewares/validator.middleware.js";
 import { AvailableUserRole, UserRolesEnum } from "../utils/constants.js";
 import {
+  rankTaskValidator,
   bulkTaskValidator,
   savedFilterValidator,
   taskLinkValidator,
@@ -92,6 +94,16 @@ router
 router
   .route("/:projectId/filters/:filterId")
   .delete(validateProjectPermission(AvailableUserRole), deleteSavedFilter);
+
+router
+  .route("/:projectId/t/:taskId/rank")
+  .put(
+    validateProjectPermission(TASK_MANAGERS),
+    broadcast,
+    rankTaskValidator(),
+    validate,
+    rankTask,
+  );
 
 router
   .route("/:projectId/t/:taskId/links")

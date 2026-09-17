@@ -66,6 +66,7 @@ import {
   parseStoryPoints,
   startOfTodayUtc,
 } from "../utils/task-fields.js";
+import { nextRank, rankBetween } from "../utils/rank.js";
 import {
   TASK_KEY_PATTERN,
   reserveTaskNumber,
@@ -312,6 +313,7 @@ const TASK_SORT_FIELDS = [
   "dueDate",
   "priority",
   "key",
+  "rank",
 ] as const;
 
 /**
@@ -431,6 +433,7 @@ const getTasks = asyncHandler<ProjectParams>(async (req, res) => {
     dueDate: "dueSort",
     priority: "priorityRank",
     key: "number",
+    rank: "rank",
   }[query.sortField];
   const notDone = { $ne: ["$statusCategory", StatusCategoryEnum.DONE] };
 
@@ -625,6 +628,8 @@ const createTask = asyncHandler<ProjectParams>(async (req, res) => {
     const task = await Task.create({
       number,
       key,
+      // New tasks go to the bottom, like Jira
+      rank: await nextRank(projectId),
       type,
       title,
       description: description.isEmpty ? undefined : description.html,
@@ -956,6 +961,63 @@ const releaseEpicChildren = async (
     })),
   );
 };
+
+/**
+ * PUT /tasks/:projectId/t/:taskId/rank { sprint, afterId? | beforeId? }
+ * Drag and drop in the backlog: moves the task into `sprint` ("" = backlog)
+ * right after `afterId`, right before `beforeId`, or to the top when neither
+ * is given. Changing sprint is recorded like any other sprint change.
+ */
+const rankTask = asyncHandler<TaskParams>(async (req, res) => {
+  const currentUser = requireUser(req);
+  const task = await findTaskInProject(req.params.projectId, req.params.taskId);
+  if (task.type === TaskTypeEnum.EPIC) {
+    throw new ApiError(400, "Epics aren't ordered in the backlog");
+  }
+
+  const neighbour = async (value: unknown) => {
+    if (!value) return undefined;
+    const found = await Task.findOne(
+      { _id: toObjectId(value, "task id"), project: task.project },
+      "_id rank",
+    ).lean();
+    if (!found) throw new ApiError(404, "The neighbouring task was not found");
+    if (found._id.equals(task._id)) {
+      throw new ApiError(400, "A task can't be placed next to itself");
+    }
+    return found;
+  };
+  const [after, before] = await Promise.all([
+    neighbour(req.body.afterId),
+    neighbour(req.body.beforeId),
+  ]);
+
+  const project = await loadWorkflowProject(task.project);
+  // Validates the sprint (not completed, in this project) and logs the move
+  const changes = await applyTaskChanges(
+    task,
+    { sprint: req.body.sprint ?? "" },
+    project,
+  );
+  task.rank = await rankBetween({
+    projectId: task.project,
+    taskId: task._id,
+    sprint: task.sprint,
+    after: after ?? undefined,
+    before: after ? undefined : (before ?? undefined),
+  });
+  await saveTaskChanges(task, changes, currentUser);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { _id: task._id, rank: task.rank, sprint: task.sprint ?? null },
+        "Task moved",
+      ),
+    );
+});
 
 /** Saves applied changes and records their history and notifications */
 const saveTaskChanges = async (
@@ -1854,6 +1916,7 @@ const getMyTasks = asyncHandler(async (req, res) => {
 });
 
 export {
+  rankTask,
   addTaskLink,
   bulkUpdateTasks,
   deleteSavedFilter,

@@ -27,6 +27,11 @@ export interface ITaskAttachment {
 export interface ITask {
   /** Ticket number within the project (SPST-12 -> 12) */
   number: number;
+  /**
+   * Manual order in the backlog and sprints (lower = higher up). Spaced out so
+   * a task can move between two others without renumbering the rest.
+   */
+  rank: number;
   /** Ticket key, e.g. SPST-12. Project keys are locked once tasks exist. */
   key: string;
   type: TaskType;
@@ -62,6 +67,7 @@ export type TaskDocument = HydratedDocument<ITask>;
 const taskSchema = new Schema<ITask>(
   {
     number: { type: Number, required: true },
+    rank: { type: Number, required: true },
     key: { type: String, required: true },
     type: {
       type: String,
@@ -147,5 +153,6 @@ const taskSchema = new Schema<ITask>(
 
 taskSchema.index({ key: 1 }, { unique: true });
 taskSchema.index({ project: 1, number: 1 }, { unique: true });
+taskSchema.index({ project: 1, sprint: 1, rank: 1 });
 
 export const Task = mongoose.model<ITask>("Task", taskSchema);

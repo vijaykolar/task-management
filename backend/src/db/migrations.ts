@@ -216,6 +216,47 @@ const backfillTicketKeys = async () => {
   }
 };
 
+/**
+ * Tasks created before manual ranking get a rank matching the order the
+ * backlog used to show: highest priority first, then oldest first.
+ */
+const backfillTaskRanks = async () => {
+  const projectIds = await Task.distinct("project", {
+    rank: { $exists: false },
+  });
+  let ranked = 0;
+  for (const projectId of projectIds) {
+    const tasks = await Task.aggregate<{ _id: mongoose.Types.ObjectId }>([
+      { $match: { project: projectId } },
+      {
+        $addFields: {
+          priorityRank: {
+            $indexOfArray: [
+              ["urgent", "high", "medium", "low"],
+              { $ifNull: ["$priority", "medium"] },
+            ],
+          },
+        },
+      },
+      // Already ranked tasks keep their relative order at the top
+      { $sort: { rank: 1, priorityRank: 1, createdAt: 1, _id: 1 } },
+      { $project: { _id: 1 } },
+    ]);
+    await Task.bulkWrite(
+      tasks.map((task, index) => ({
+        updateOne: {
+          filter: { _id: task._id },
+          update: { $set: { rank: (index + 1) * 1000 } },
+        },
+      })),
+    );
+    ranked += tasks.length;
+  }
+  if (ranked > 0) {
+    console.log(`🛠  Ranked ${ranked} tasks for manual ordering`);
+  }
+};
+
 export const runMigrations = async () => {
   await dropGlobalProjectNameIndex();
   await removeDuplicateMemberships();
@@ -224,6 +265,7 @@ export const runMigrations = async () => {
   await convertPlainTextDescriptions();
   await backfillProjectWorkflows();
   await backfillTicketKeys();
+  await backfillTaskRanks();
 
   const results = await Promise.allSettled(
     Object.values(mongoose.models).map((model) => model.createIndexes()),
